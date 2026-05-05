@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CK Analytics</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <style>
+    /* ── Item search modal ───────────────────────────────────────── */
+    .search-modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      z-index: 10000;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 80px;
+    }
+    .search-modal-overlay.open { display: flex; }
+    .search-modal {
+      background: #1e293b;
+      border: 1px solid #2d3f55;
+      border-radius: 8px;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+      width: 480px;
+      max-width: 92vw;
+      overflow: hidden;
+    }
+    .search-modal-header {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      padding: 10px 10px;
+    }
+    .search-modal-input {
+      flex: 1;
+      background: #263347;
+      border: 1px solid #334155;
+      border-right: none;
+      border-radius: 6px 0 0 6px;
+      color: #e2e8f0;
+      font-size: 14px;
+      height: 38px;
+      padding: 0 12px;
+      outline: none;
+    }
+    .search-modal-input::placeholder { color: #64748b; }
+    .search-modal-go {
+      background: #3b82f6;
+      border: 1px solid #3b82f6;
+      border-radius: 0 6px 6px 0;
+      color: #fff;
+      cursor: pointer;
+      font-size: 15px;
+      height: 38px;
+      width: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .search-modal-go:hover { background: #2563eb; }
+    .search-modal-results {
+      max-height: 360px;
+      overflow-y: auto;
+      border-top: 1px solid #263347;
+    }
+    .search-modal-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 14px;
+      cursor: pointer;
+      border-bottom: 1px solid #1a2636;
+      transition: background 0.1s;
+    }
+    .search-modal-row:last-child { border-bottom: none; }
+    .search-modal-row:hover { background: #263347; }
+    .search-modal-num {
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      font-weight: 700;
+      color: #93c5fd;
+      white-space: nowrap;
+      min-width: 72px;
+    }
+    .search-modal-name {
+      flex: 1;
+      font-size: 13px;
+      color: #cbd5e1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .search-modal-badge {
+      font-size: 10px;
+      color: #64748b;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      padding: 2px 6px;
+      white-space: nowrap;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .search-modal-hint {
+      padding: 16px;
+      font-size: 13px;
+      color: #64748b;
+      text-align: center;
+    }
+    /* ── Trend view toggle ──────────────────────────────────────── */
+    .trend-toggle {
+      display: flex;
+      gap: 0;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .trend-btn {
+      background: #fff;
+      border: none;
+      color: #6b7280;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      padding: 3px 10px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .trend-btn + .trend-btn { border-left: 1px solid #e2e8f0; }
+    .trend-btn.active { background: #0d9488; color: #fff; }
+    .trend-btn:not(.active):hover { background: #f1f5f9; color: #374151; }
+    /* ── Nav search wrap ────────────────────────────────────────── */
+    .nav-search-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .nav-search-icon {
+      position: absolute;
+      left: 9px;
+      width: 15px;
+      height: 15px;
+      color: #94a3b8;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: color 0.15s;
+      pointer-events: all;
+    }
+    .nav-search-icon:hover { color: #e2e8f0; }
+    .nav-search-wrap .nav-search-input { padding-left: 30px; }
+  </style>
+</head>
+<body>
+
+<!-- ── Nav Bar ─────────────────────────────────────────────── -->
+<nav class="nav-bar">
+  <div class="nav-left">
+    <div class="nav-icon">CK</div>
+    <span class="nav-title">CK Analytics</span>
+  </div>
+  <div class="nav-center">
+    <div class="nav-search-wrap">
+      <svg class="nav-search-icon" onclick="openSearchModal()" title="Search by name" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd"/>
+      </svg>
+      <input type="text" id="item-search" class="nav-search-input"
+             placeholder="Item #" maxlength="30" autocomplete="off">
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="doSearch()">Search</button>
+    <button class="btn btn-ghost btn-sm" onclick="clearView()">Clear</button>
+  </div>
+  <div class="nav-right">
+    <span class="nav-stat" id="toolbar-status">Loading...</span>
+    <button class="btn btn-ghost btn-sm" onclick="loadData()">&#8635; Refresh</button>
+  </div>
+</nav>
+
+<!-- ── Item Search Modal ────────────────────────────────────── -->
+<div class="search-modal-overlay" id="search-modal-overlay">
+  <div class="search-modal">
+    <div class="search-modal-header">
+      <input type="text" id="search-modal-input" class="search-modal-input"
+             placeholder="Search items..." autocomplete="off" maxlength="80">
+      <button class="search-modal-go" onclick="searchModalGo()" title="Search">&#128269;</button>
+    </div>
+    <div class="search-modal-results" id="search-modal-results">
+      <div class="search-modal-hint">Type to search items...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Tab Bar ─────────────────────────────────────────────── -->
+<div class="tab-bar">
+  <button class="tab-btn active" id="tab-btn-item"     onclick="switchTab('item')">Item Zoom</button>
+  <button class="tab-btn"        id="tab-btn-category" onclick="switchTab('category')">Category Performance</button>
+  <button class="tab-btn"        id="tab-btn-store"    onclick="switchTab('store')">Store Performance</button>
+</div>
+
+<!-- ── Loading Screen ──────────────────────────────────────── -->
+<div id="loading-screen" class="screen" style="display:flex">
+  <div class="load-title">Loading CK Analytics...</div>
+  <div class="load-bar-outer"><div class="load-bar-inner"></div></div>
+  <div id="load-msg">Fetching data...</div>
+</div>
+
+<!-- File picker removed — data now loaded from API -->
+
+<!-- ── Main App (revealed after data loads) ────────────────── -->
+<div id="app-content" class="main-content" style="display:none">
+
+  <!-- Item Zoom tab panel -->
+  <div id="tab-item" class="tab-panel" style="display:flex">
+
+    <div id="welcome-screen" class="screen" style="display:flex">
+      <div class="welcome-logo">CK</div>
+      <div class="welcome-tagline">Cloverkey Analytics</div>
+      <div class="welcome-hint">Enter an item number above and press Search.</div>
+      <div class="welcome-stats" id="welcome-data-msg"></div>
+    </div>
+
+    <div id="error-view" style="display:none;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center">
+      <div class="error-icon">&#9888;</div>
+      <div class="error-title">Item Not Found</div>
+      <div class="error-msg" id="error-msg"></div>
+    </div>
+
+    <div id="item-view" style="display:none">
+
+      <!-- Item header -->
+      <div class="item-header-card">
+        <div class="hdr-name" id="h-name"></div>
+        <div class="hdr-meta-row">
+          <span class="hdr-badge"      id="h-itemno"></span>
+          <span class="hdr-pill"><span class="hdr-lbl">Category</span> <span class="hdr-val" id="h-categ"></span></span>
+          <span class="hdr-pill"><span class="hdr-lbl">Sub-Category</span> <span class="hdr-val" id="h-subcat"></span></span>
+          <span class="hdr-rank-badge" id="h-rank"></span>
+          <span class="hdr-pill"><span class="hdr-lbl">Peers</span> <span class="hdr-val" id="h-peers"></span></span>
+          <a class="hdr-cat-link" id="h-catlink"></a>
+        </div>
+      </div>
+
+      <!-- KPI cards -->
+      <div class="kpi-row">
+        <div class="kpi-card kpi-card-sales">
+          <div class="kpi-lbl">90-Day Sales</div>
+          <div class="kpi-val" id="k-qty90"></div>
+          <div class="kpi-sub" id="k-amt90"></div>
+        </div>
+        <div class="kpi-card kpi-card-sales">
+          <div class="kpi-lbl">30-Day Sales</div>
+          <div class="kpi-val" id="k-qty30"></div>
+          <div class="kpi-sub" id="k-amt30"></div>
+        </div>
+        <div class="kpi-card kpi-card-sales">
+          <div class="kpi-lbl">7-Day Sales</div>
+          <div class="kpi-val" id="k-qty7"></div>
+          <div class="kpi-sub" id="k-amt7"></div>
+        </div>
+        <div class="kpi-card kpi-card-vel">
+          <div class="kpi-lbl">Sales Velocity</div>
+          <div class="kpi-val" id="k-vel"></div>
+          <div class="kpi-sub" id="k-pct"></div>
+        </div>
+        <div class="kpi-card kpi-card-sales">
+          <div class="kpi-lbl">Margin %</div>
+          <div class="kpi-val" id="k-margin"></div>
+          <div class="kpi-sub" id="k-margin-sub"></div>
+        </div>
+        <div class="kpi-card kpi-card-sales">
+          <div class="kpi-lbl">90-Day Profit</div>
+          <div class="kpi-val" id="k-profit"></div>
+          <div class="kpi-sub" id="k-profit-sub"></div>
+        </div>
+        <div class="kpi-card kpi-card-status">
+          <div class="kpi-lbl">Item Status</div>
+          <div class="kpi-val" id="k-status"></div>
+          <div class="kpi-sub" id="k-stock"></div>
+        </div>
+      </div>
+
+      <!-- Rank strip -->
+      <div class="rank-strip">
+        <div class="rank-text">
+          <div class="rank-main"   id="rank-main"></div>
+        </div>
+        <div class="rank-bar-wrap">
+          <div class="rank-bar-fill" id="rank-bar" style="width:0%"></div>
+          <div class="rank-bar-lbl"  id="rank-bar-lbl"></div>
+        </div>
+      </div>
+
+      <!-- Charts -->
+      <div class="charts-row">
+        <div class="chart-panel">
+          <div class="chart-title" style="display:flex;align-items:center;justify-content:space-between">
+            <span>90-Day Sales Trend</span>
+            <div class="trend-toggle">
+              <button id="trend-btn-daily"  class="trend-btn active" onclick="setTrendView('daily')">Daily</button>
+              <button id="trend-btn-weekly" class="trend-btn"        onclick="setTrendView('weekly')">Weekly</button>
+            </div>
+          </div>
+          <div class="chart-container"><canvas id="chart-trend"></canvas></div>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-title">Store Stock Distribution</div>
+          <div class="chart-container"><canvas id="chart-stores"></canvas></div>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-title">90D Actual vs Expected</div>
+          <div class="chart-container"><canvas id="chart-compare"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Inventory table -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title">Inventory Summary</div>
+        <div class="inv-summary" id="inv-summary"></div>
+        <div class="inv-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Store</th>
+                <th class="num-ctr">30D Sales</th>
+                <th class="num-ctr">30D Revenue</th>
+                <th class="num-ctr">90D Sales</th>
+                <th class="num-ctr">90D Revenue</th>
+                <th class="num-ctr">Qty Available</th>
+                <th class="num-ctr">Clearance 30D</th>
+                <th class="num-ctr">MOS 30D</th>
+              </tr>
+            </thead>
+            <tbody id="inv-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /#item-view -->
+  </div><!-- /#tab-item -->
+
+  <!-- Category Performance tab panel -->
+  <div id="tab-category" class="tab-panel" style="display:none">
+    <div id="cat-view-content"></div>
+  </div>
+
+  <!-- Store Performance tab panel -->
+  <div id="tab-store" class="tab-panel" style="display:none">
+    <div id="store-view-content"></div>
+  </div>
+
+</div><!-- /#app-content -->
+
+<!-- ── Footer ──────────────────────────────────────────────── -->
+<div class="dash-footer">
+  <span id="dash-footer-ts">Loading data...</span>
+</div>
+
+<script>
+  // ── Item search modal ────────────────────────────────────────
+  const _BASE_SEARCH = `${window.location.protocol}//${window.location.hostname}:3001/proxy`;
+  let _searchTimer = null;
+
+  function openSearchModal() {
+    document.getElementById('search-modal-overlay').classList.add('open');
+    const inp = document.getElementById('search-modal-input');
+    inp.value = '';
+    document.getElementById('search-modal-results').innerHTML =
+      '<div class="search-modal-hint">Type to search items...</div>';
+    setTimeout(() => inp.focus(), 50);
+  }
+
+  function closeSearchModal() {
+    document.getElementById('search-modal-overlay').classList.remove('open');
+    clearTimeout(_searchTimer);
+  }
+
+  function searchModalGo() {
+    const first = document.querySelector('.search-modal-row');
+    if (first) first.click();
+  }
+
+  // Close on overlay click (outside the modal box)
+  document.getElementById('search-modal-overlay').addEventListener('click', function(e) {
+    if (e.target === this) closeSearchModal();
+  });
+
+  document.getElementById('search-modal-input').addEventListener('input', function() {
+    clearTimeout(_searchTimer);
+    const q = this.value.trim();
+    const results = document.getElementById('search-modal-results');
+    if (q.length < 2) {
+      results.innerHTML = '<div class="search-modal-hint">Type to search items...</div>';
+      return;
+    }
+    results.innerHTML = '<div class="search-modal-hint">Searching...</div>';
+    _searchTimer = setTimeout(async () => {
+      try {
+        const resp = await fetch(`${_BASE_SEARCH}/items/search?q=${encodeURIComponent(q)}`);
+        const rows = resp.ok ? await resp.json() : [];
+        if (!rows.length) {
+          results.innerHTML = '<div class="search-modal-hint">No results found.</div>';
+          return;
+        }
+        results.innerHTML = '';
+        rows.forEach(r => {
+          const row = document.createElement('div');
+          row.className = 'search-modal-row';
+          row.innerHTML =
+            `<span class="search-modal-num">${r.itemNo}</span>` +
+            `<span class="search-modal-name">${r.name}</span>` +
+            `<span class="search-modal-badge">${r.category}${r.subcat ? ' / ' + r.subcat : ''}</span>`;
+          row.addEventListener('click', () => {
+            closeSearchModal();
+            if (typeof doSearch === 'function') doSearch(r.itemNo);
+          });
+          results.appendChild(row);
+        });
+      } catch (_) {
+        results.innerHTML = '<div class="search-modal-hint">Error fetching results.</div>';
+      }
+    }, 300);
+  });
+
+  document.getElementById('search-modal-input').addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeSearchModal();
+    if (e.key === 'Enter') {
+      const first = document.querySelector('.search-modal-row');
+      if (first) first.click();
+    }
+  });
+
+  // Plain nav search input — Enter key fires doSearch
+  document.getElementById('item-search').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') doSearch();
+  });
+</script>
+<script src="js/utils.js"></script>
+<script src="js/math.js"></script>
+<script src="js/data-loader.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/views/item-zoom.js"></script>
+<script src="js/views/category.js"></script>
+<script src="js/views/store.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
