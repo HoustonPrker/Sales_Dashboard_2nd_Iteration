@@ -1,17 +1,18 @@
 {
-  "name": "ck-analytics-db",
-  "version": "1.0.0",
-  "description": "CK Analytics Dashboard — Cloverkey",
-  "main": "proxy.js",
+  "name": "kellis-sales",
+  "version": "2.0.0",
+  "description": "Kellis Sales Intelligence Platform",
+  "main": "server/proxy.js",
   "scripts": {
-    "start": "node proxy.js",
-    "dev": "nodemon proxy.js"
+    "start": "node server/proxy.js",
+    "dev": "nodemon server/proxy.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",
     "node-fetch": "^2.7.0",
-    "csv-parse": "^5.5.0"
+    "csv-parse": "^5.5.0",
+    "@anthropic-ai/sdk": "^0.27.0"
   }
 }

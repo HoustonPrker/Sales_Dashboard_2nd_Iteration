@@ -1,12 +1,9 @@
 // ============================================================
-// DATA LOADER — Proxy API (replaces CSV fetch)
-// All data comes from the local proxy server at localhost:3001
-// Start with: node proxy.js
+// DATA LOADER — Kellis Sales proxy API
+// Start with: node server/proxy.js
 // ============================================================
 
-const BASE = `${window.location.protocol}//${window.location.hostname}:3001/proxy`;
-
-// ── Progress UI helpers ───────────────────────────────────────
+const BASE = '/proxy';
 
 function setLoadMsg(msg) {
   const el = document.getElementById('load-msg');
@@ -18,98 +15,20 @@ function setLoadProgress(pct) {
   if (bar) bar.style.width = Math.min(100, Math.round(pct)) + '%';
 }
 
-// ── Boot loader — populates all global state ──────────────────
-// Keeps the same globals (pipelineData, storeData, dailySalesIndex, normalityMap)
-// so all view files work without changes.
+// ── Boot: show rep picker immediately (no API call needed) ────
 
 async function loadData() {
-  hide('file-picker');
   show('loading-screen');
-  setLoadMsg('Connecting to proxy...');
-  setLoadProgress(0);
+  setLoadMsg('Loading sales reps…');
+  setLoadProgress(20);
 
   try {
-    // Fetch rankings and store data at boot — daily sales loaded on demand per item
-    setLoadMsg('Loading data from proxy...');
-    const [rankingsResp, storeDataResp] = await Promise.all([
-      fetch(`${BASE}/rankings`),
-      fetch(`${BASE}/store-data`),
-    ]);
-
-    if (!rankingsResp.ok) throw new Error('Could not load rankings from proxy. Is node proxy.js running?');
-    if (!storeDataResp.ok) throw new Error('Could not load store data from proxy.');
-
-    setLoadProgress(40);
-
-    const [rankingsRaw, storeDataRaw] = await Promise.all([
-      rankingsResp.json(),
-      storeDataResp.json(),
-    ]);
-
-    setLoadProgress(70);
-
-    // Populate pipelineData — used by item-zoom and category views
-    pipelineData = rankingsRaw.map(r => ({
-      ITEM_NO:               (r.ITEM_NO || '').trim(),
-      ITEM_NAME:             r.DESCR          || r.ITEM_NAME     || '',
-      CATEG_COD:             r.CATEG_COD      || r.CATEGORY      || '',
-      SUBCAT_COD:            r.SUBCAT_COD     || r.SUBCAT        || '',
-      RAW_QTY_90D:           r.RAW_QTY_90D    || r.SALES_90D     || 0,
-      RAW_AMT_90D:           r.RAW_AMT_90D    || r.REV_90D       || 0,
-      RAW_QTY_12M_TOTAL:     r.RAW_QTY_12M_TOTAL || r.SALES_90D  || 0,
-      RAW_AMT_12M_TOTAL:     r.RAW_AMT_12M_TOTAL || r.REV_90D    || 0,
-      PCT_RECENT:            r.PCT_RECENT     || 0,
-      SUBCAT_RANK:           r.SUBCAT_RANK    || 0,
-      SUBCAT_TOTAL:          r.SUBCAT_TOTAL   || 0,
-      PEER_COUNT:            r.PEER_COUNT     || r.SUBCAT_TOTAL  || 0,
-      PERCENTILE:            r.PERCENTILE     || 0,
-      RANK_METHOD:           r.RANK_METHOD    || '',
-      STATUS:                r.STATUS         || '',
-      QTY_AVAIL_ALL_STORES:  r.QTY_AVAIL_ALL_STORES  || 0,
-      QTY_ON_HND_ALL_STORES: r.QTY_ON_HND_ALL_STORES || 0,
-      STORES_WITH_STOCK:     r.STORES_WITH_STOCK      || 0,
-      PRICE:                 r.PRICE      || r.price1    || null,
-      LAST_COST:             r.LAST_COST  || r.lastCost  || null,
-      MARGIN_PCT:            r.MARGIN_PCT || null,
-    }));
-
-    // Populate normalityMap — keyed by "CATEG|SUBCAT", used by computePercentile()
-    normalityMap = {};
-    rankingsRaw.forEach(r => {
-      const cat    = r.CATEG_COD  || r.CATEGORY || '';
-      const subcat = r.SUBCAT_COD || r.SUBCAT   || '';
-      const key    = `${cat}|${subcat}`;
-      if (!normalityMap[key]) {
-        normalityMap[key] = { CATEG_COD: cat, SUBCAT_COD: subcat, RANK_METHOD: r.RANK_METHOD || '' };
-      }
-    });
-
-    // Populate storeData — used by store view (legacy CSV with tier/revenue fields)
-    storeData = storeDataRaw;
-
-    // dailySalesIndex populated on demand in loadItemData() — not pre-loaded at boot
-    dailySalesIndex = {};
-
+    const resp = await fetch(`${BASE}/reps`);
+    if (!resp.ok) throw new Error(`Proxy not reachable (${resp.status}). Is node server/proxy.js running?`);
+    const reps = await resp.json();
     setLoadProgress(100);
-    dataReady = true;
-
-    const subcatCount = new Set(
-      pipelineData.map(i => `${i.CATEG_COD}|${i.SUBCAT_COD}`)
-    ).size;
-
-    const ts = new Date().toLocaleString('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric',
-      hour: 'numeric', minute: '2-digit'
-    });
-    document.getElementById('dash-footer-ts').textContent   = `Data as of ${ts}`;
-    document.getElementById('toolbar-status').textContent   = `${pipelineData.length.toLocaleString()} items loaded`;
-    document.getElementById('welcome-data-msg').textContent =
-      `${pipelineData.length.toLocaleString()} items · ${subcatCount} sub-categories loaded.`;
-
     hide('loading-screen');
-    document.getElementById('app-content').style.display = 'flex';
-    doSearch('4000');
-
+    showRepPicker(reps);
   } catch (err) {
     setLoadMsg('Error: ' + err.message);
     const el = document.getElementById('load-msg');
@@ -118,61 +37,106 @@ async function loadData() {
   }
 }
 
-// ── Item Zoom data (per search) ───────────────────────────────
-// Fetches live inventory + daily sales on demand for the searched item.
+// ── Background prefetch for Item Performance ──────────────────
 
-async function loadItemData(itemNo) {
-  const key = (itemNo || '').trim();
-  const enc = encodeURIComponent(key);
-
-  const [itemResp, invResp, dailyResp] = await Promise.all([
-    fetch(`${BASE}/item/${enc}`),
-    fetch(`${BASE}/item/${enc}/inventory`),
-    fetch(`${BASE}/item/${enc}/daily-sales`),
-  ]);
-
-  const item      = itemResp.ok  ? await itemResp.json()  : {};
-  const inventory = invResp.ok   ? await invResp.json()   : [];
-  const dailyRaw  = dailyResp.ok ? await dailyResp.json() : [];
-
-  const itemData = item.data || item;
-  const inv      = Array.isArray(inventory) ? inventory : (inventory.data || []);
-
-  const qtyAvail        = inv.reduce((s, r) => s + (parseFloat(r.qtyAvailable || r.QTY_AVAILABLE) || 0), 0);
-  const qtyOH           = inv.reduce((s, r) => s + (parseFloat(r.qtyOnHand    || r.QTY_ON_HAND)   || 0), 0);
-  const storesWithStock = inv.filter(r => (parseFloat(r.qtyAvailable || r.QTY_AVAILABLE) || 0) > 0).length;
-
-  // Populate dailySalesIndex for this item so getDailySalesForItem() works
-  const rows = Array.isArray(dailyRaw) ? dailyRaw : (dailyRaw.data || []);
-  dailySalesIndex[key] = rows;
-
-  return {
-    QTY_AVAIL_ALL_STORES:  qtyAvail,
-    QTY_ON_HND_ALL_STORES: qtyOH,
-    STORES_WITH_STOCK:     storesWithStock,
-    PRICE:                 itemData.price1   || 0,
-    LAST_COST:             itemData.lastCost || 0,
-  };
+async function prefetchItemPerformance(rep) {
+  if (typeof ipCatData === 'undefined' || typeof ipLoading === 'undefined') return;
+  if (ipCatData.length || ipLoading) return;
+  try {
+    ipLoading = true;
+    const repParam = rep ? `?rep=${encodeURIComponent(rep)}` : '';
+    const resp = await fetch(`${BASE}/all-categories${repParam}`);
+    ipCatData = resp.ok ? await resp.json() : [];
+  } catch (_) {
+  } finally {
+    ipLoading = false;
+  }
 }
 
-// ── All rankings ──────────────────────────────────────────────
-async function loadAllRankings() {
-  const r = await fetch(`${BASE}/rankings`);
-  if (!r.ok) return [];
-  return r.json();
+// ── Rep picker screen ─────────────────────────────────────────
+
+function showRepPicker(reps) {
+  const appEl = document.getElementById('app-content');
+  if (appEl) appEl.style.display = 'none';
+
+  let picker = document.getElementById('rep-picker-screen');
+  if (!picker) {
+    picker = document.createElement('div');
+    picker.id = 'rep-picker-screen';
+    picker.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;padding:60px 20px;text-align:center;background:#f0f2f5';
+    document.body.insertBefore(picker, document.querySelector('.dash-footer'));
+  }
+
+  const options = reps.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+
+  picker.innerHTML = `
+    <div style="background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,0.10);padding:48px 56px;max-width:420px;width:100%">
+      <div style="width:48px;height:48px;background:#3d5a80;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:#fff;margin:0 auto 20px">KS</div>
+      <div style="font-size:22px;font-weight:700;color:#1a2332;margin-bottom:6px">Kellis Sales</div>
+      <div style="font-size:14px;color:#6b7280;margin-bottom:28px">Select your sales rep to continue</div>
+      <select id="rep-select" style="width:100%;border:1px solid #d1d5db;border-radius:8px;padding:10px 14px;font-size:15px;font-family:inherit;color:#1a2332;background:#fff;outline:none;margin-bottom:20px">
+        <option value="" disabled selected>Choose a rep…</option>
+        ${options}
+      </select>
+      <button id="rep-go-btn" onclick="loadAccountsForRep()"
+        style="width:100%;background:#3d5a80;color:#fff;border:none;border-radius:8px;padding:11px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer">
+        View Accounts →
+      </button>
+      <div id="rep-picker-error" style="margin-top:12px;font-size:13px;color:#dc2626;display:none">Please select a rep.</div>
+    </div>`;
+
+  picker.style.display = 'flex';
+
+  document.getElementById('rep-select').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loadAccountsForRep();
+  });
 }
 
-// ── Stores ────────────────────────────────────────────────────
-async function loadStores() {
-  const r = await fetch(`${BASE}/stores`);
-  if (!r.ok) return [];
-  return r.json();
-}
+// ── Load accounts for selected rep ───────────────────────────
 
-// ── Browse/search items ───────────────────────────────────────
-async function browseItems(params = {}) {
-  const qs = new URLSearchParams(params).toString();
-  const r  = await fetch(`${BASE}/items?${qs}`);
-  if (!r.ok) return { data: [] };
-  return r.json();
+async function loadAccountsForRep() {
+  const select = document.getElementById('rep-select');
+  const errEl  = document.getElementById('rep-picker-error');
+  const rep    = select ? select.value : '';
+
+  if (!rep) {
+    if (errEl) errEl.style.display = 'block';
+    return;
+  }
+  if (errEl) errEl.style.display = 'none';
+
+  const btn = document.getElementById('rep-go-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+
+  try {
+    const resp = await fetch(`${BASE}/accounts?rep=${encodeURIComponent(rep)}`);
+    if (!resp.ok) throw new Error(`Failed to load accounts (${resp.status})`);
+    accountsData = await resp.json();
+    currentRep   = rep;
+
+    const picker = document.getElementById('rep-picker-screen');
+    if (picker) picker.style.display = 'none';
+    const appEl = document.getElementById('app-content');
+    if (appEl) appEl.style.display = 'flex';
+
+    dataReady = true;
+
+    const ts = new Date().toLocaleString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric',
+      hour: 'numeric', minute: '2-digit'
+    });
+    const footer = document.getElementById('dash-footer-ts');
+    if (footer) footer.textContent = `Data as of ${ts}`;
+
+    const status = document.getElementById('toolbar-status');
+    if (status) status.textContent = `${rep} · ${accountsData.length} accounts`;
+
+    switchTab('store');
+    prefetchItemPerformance(rep);
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = 'View Accounts →'; }
+    const errEl = document.getElementById('rep-picker-error');
+    if (errEl) { errEl.textContent = 'Error: ' + err.message; errEl.style.display = 'block'; }
+    console.error(err);
+  }
 }

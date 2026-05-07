@@ -1,4 +1,4 @@
 @echo off
-cd C:\Users\houstonp\Desktop\CK-Analytics-DB
+cd /d "%~dp0"
 npm install
-node proxy.js
+node server/proxy.js

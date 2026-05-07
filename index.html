@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CK Analytics</title>
+  <title>Kellis Sales</title>
   <link rel="stylesheet" href="css/styles.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <style>
@@ -134,6 +134,17 @@
     .trend-btn + .trend-btn { border-left: 1px solid #e2e8f0; }
     .trend-btn.active { background: #0d9488; color: #fff; }
     .trend-btn:not(.active):hover { background: #f1f5f9; color: #374151; }
+    /* ── Nav search dropdown rows ──────────────────────────────── */
+    .nav-srch-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 14px; cursor: pointer; border-bottom: 1px solid #1e2d3d;
+      transition: background 0.1s;
+    }
+    .nav-srch-row:last-child { border-bottom: none; }
+    .nav-srch-row:hover { background: #263347; }
+    .nav-srch-num  { font-family: monospace; font-size: 12px; font-weight: 700; color: #93c5fd; white-space: nowrap; min-width: 72px; }
+    .nav-srch-name { flex: 1; font-size: 13px; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav-srch-state { font-size: 11px; color: #64748b; background: #0f172a; border: 1px solid #334155; border-radius: 4px; padding: 2px 6px; }
     /* ── Nav search wrap ────────────────────────────────────────── */
     .nav-search-wrap {
       position: relative;
@@ -160,52 +171,65 @@
 <!-- ── Nav Bar ─────────────────────────────────────────────── -->
 <nav class="nav-bar">
   <div class="nav-left">
-    <div class="nav-icon">CK</div>
-    <span class="nav-title">CK Analytics</span>
+    <div class="nav-icon">KS</div>
+    <span class="nav-title">Kellis Sales</span>
   </div>
   <div class="nav-center">
-    <div class="nav-search-wrap">
-      <svg class="nav-search-icon" onclick="openSearchModal()" title="Search by name" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-        <path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd"/>
-      </svg>
-      <input type="text" id="item-search" class="nav-search-input"
-             placeholder="Item #" maxlength="30" autocomplete="off">
-    </div>
-    <button class="btn btn-primary btn-sm" onclick="doSearch()">Search</button>
-    <button class="btn btn-ghost btn-sm" onclick="clearView()">Clear</button>
+    <button class="btn btn-ghost btn-sm" onclick="switchTab('store')">Home</button>
   </div>
   <div class="nav-right">
     <span class="nav-stat" id="toolbar-status">Loading...</span>
     <button class="btn btn-ghost btn-sm" onclick="loadData()">&#8635; Refresh</button>
+    <button class="btn btn-ghost btn-sm" onclick="switchRep()" title="Switch rep">Switch Rep</button>
   </div>
 </nav>
 
-<!-- ── Item Search Modal ────────────────────────────────────── -->
-<div class="search-modal-overlay" id="search-modal-overlay">
-  <div class="search-modal">
-    <div class="search-modal-header">
-      <input type="text" id="search-modal-input" class="search-modal-input"
-             placeholder="Search items..." autocomplete="off" maxlength="80">
-      <button class="search-modal-go" onclick="searchModalGo()" title="Search">&#128269;</button>
-    </div>
-    <div class="search-modal-results" id="search-modal-results">
-      <div class="search-modal-hint">Type to search items...</div>
-    </div>
-  </div>
-</div>
 
 <!-- ── Tab Bar ─────────────────────────────────────────────── -->
 <div class="tab-bar">
-  <button class="tab-btn active" id="tab-btn-item"     onclick="switchTab('item')">Item Zoom</button>
-  <button class="tab-btn"        id="tab-btn-category" onclick="switchTab('category')">Category Performance</button>
-  <button class="tab-btn"        id="tab-btn-store"    onclick="switchTab('store')">Store Performance</button>
+  <button class="tab-btn active" id="tab-btn-store"    onclick="switchTab('store')">Account Performance</button>
+  <button class="tab-btn"        id="tab-btn-item"     onclick="switchTab('item')">Customer Account</button>
+  <!-- Customer search — shown only when Customer Account tab is active -->
+  <div id="tab-ca-search" style="display:none;align-items:center;padding:6px 0 6px 4px;position:relative">
+    <div style="position:relative">
+      <svg style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,0.5);pointer-events:none" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd"/>
+      </svg>
+      <input id="ca-search-input" type="text" placeholder="Search customers…" autocomplete="off"
+        style="padding:6px 12px 6px 30px;border:1.5px solid rgba(255,255,255,0.25);border-radius:6px;background:rgba(255,255,255,0.12);color:#fff;font-size:13px;font-family:inherit;outline:none;width:240px;transition:border-color 0.15s,background 0.15s"
+        onfocus="this.style.borderColor='rgba(255,255,255,0.6)';this.style.background='rgba(255,255,255,0.18)'"
+        onblur="this.style.borderColor='rgba(255,255,255,0.25)';this.style.background='rgba(255,255,255,0.12)'"
+      />
+      <div id="ca-search-dropdown"
+        style="display:none;position:absolute;top:calc(100% + 4px);left:0;min-width:320px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:9999;max-height:320px;overflow-y:auto">
+      </div>
+    </div>
+  </div>
+
+  <button class="tab-btn"        id="tab-btn-category" onclick="switchTab('category')">Item Performance</button>
+  <!-- Item search — shown only when Item Performance tab is active -->
+  <div id="tab-ip-search" style="display:none;align-items:center;padding:6px 0 6px 4px;position:relative">
+    <div style="position:relative">
+      <svg style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,0.5);pointer-events:none" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clip-rule="evenodd"/>
+      </svg>
+      <input id="ip-search-input" type="text" placeholder="Search items…" autocomplete="off"
+        style="padding:6px 12px 6px 30px;border:1.5px solid rgba(255,255,255,0.25);border-radius:6px;background:rgba(255,255,255,0.12);color:#fff;font-size:13px;font-family:inherit;outline:none;width:240px;transition:border-color 0.15s,background 0.15s"
+        onfocus="this.style.borderColor='rgba(255,255,255,0.6)';this.style.background='rgba(255,255,255,0.18)'"
+        onblur="this.style.borderColor='rgba(255,255,255,0.25)';this.style.background='rgba(255,255,255,0.12)'"
+      />
+      <div id="ip-search-dropdown"
+        style="display:none;position:absolute;top:calc(100% + 4px);left:0;min-width:320px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:9999;max-height:320px;overflow-y:auto">
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ── Loading Screen ──────────────────────────────────────── -->
 <div id="loading-screen" class="screen" style="display:flex">
-  <div class="load-title">Loading CK Analytics...</div>
+  <div class="load-title">Loading Kellis Sales...</div>
   <div class="load-bar-outer"><div class="load-bar-inner"></div></div>
-  <div id="load-msg">Fetching data...</div>
+  <div id="load-msg">Fetching accounts...</div>
 </div>
 
 <!-- File picker removed — data now loaded from API -->
@@ -213,146 +237,31 @@
 <!-- ── Main App (revealed after data loads) ────────────────── -->
 <div id="app-content" class="main-content" style="display:none">
 
-  <!-- Item Zoom tab panel -->
-  <div id="tab-item" class="tab-panel" style="display:flex">
-
-    <div id="welcome-screen" class="screen" style="display:flex">
-      <div class="welcome-logo">CK</div>
-      <div class="welcome-tagline">Cloverkey Analytics</div>
-      <div class="welcome-hint">Enter an item number above and press Search.</div>
-      <div class="welcome-stats" id="welcome-data-msg"></div>
-    </div>
-
-    <div id="error-view" style="display:none;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center">
-      <div class="error-icon">&#9888;</div>
-      <div class="error-title">Item Not Found</div>
-      <div class="error-msg" id="error-msg"></div>
-    </div>
-
-    <div id="item-view" style="display:none">
-
-      <!-- Item header -->
-      <div class="item-header-card">
-        <div class="hdr-name" id="h-name"></div>
-        <div class="hdr-meta-row">
-          <span class="hdr-badge"      id="h-itemno"></span>
-          <span class="hdr-pill"><span class="hdr-lbl">Category</span> <span class="hdr-val" id="h-categ"></span></span>
-          <span class="hdr-pill"><span class="hdr-lbl">Sub-Category</span> <span class="hdr-val" id="h-subcat"></span></span>
-          <span class="hdr-rank-badge" id="h-rank"></span>
-          <span class="hdr-pill"><span class="hdr-lbl">Peers</span> <span class="hdr-val" id="h-peers"></span></span>
-          <a class="hdr-cat-link" id="h-catlink"></a>
-        </div>
-      </div>
-
-      <!-- KPI cards -->
-      <div class="kpi-row">
-        <div class="kpi-card kpi-card-sales">
-          <div class="kpi-lbl">90-Day Sales</div>
-          <div class="kpi-val" id="k-qty90"></div>
-          <div class="kpi-sub" id="k-amt90"></div>
-        </div>
-        <div class="kpi-card kpi-card-sales">
-          <div class="kpi-lbl">30-Day Sales</div>
-          <div class="kpi-val" id="k-qty30"></div>
-          <div class="kpi-sub" id="k-amt30"></div>
-        </div>
-        <div class="kpi-card kpi-card-sales">
-          <div class="kpi-lbl">7-Day Sales</div>
-          <div class="kpi-val" id="k-qty7"></div>
-          <div class="kpi-sub" id="k-amt7"></div>
-        </div>
-        <div class="kpi-card kpi-card-vel">
-          <div class="kpi-lbl">Sales Velocity</div>
-          <div class="kpi-val" id="k-vel"></div>
-          <div class="kpi-sub" id="k-pct"></div>
-        </div>
-        <div class="kpi-card kpi-card-sales">
-          <div class="kpi-lbl">Margin %</div>
-          <div class="kpi-val" id="k-margin"></div>
-          <div class="kpi-sub" id="k-margin-sub"></div>
-        </div>
-        <div class="kpi-card kpi-card-sales">
-          <div class="kpi-lbl">90-Day Profit</div>
-          <div class="kpi-val" id="k-profit"></div>
-          <div class="kpi-sub" id="k-profit-sub"></div>
-        </div>
-        <div class="kpi-card kpi-card-status">
-          <div class="kpi-lbl">Item Status</div>
-          <div class="kpi-val" id="k-status"></div>
-          <div class="kpi-sub" id="k-stock"></div>
-        </div>
-      </div>
-
-      <!-- Rank strip -->
-      <div class="rank-strip">
-        <div class="rank-text">
-          <div class="rank-main"   id="rank-main"></div>
-        </div>
-        <div class="rank-bar-wrap">
-          <div class="rank-bar-fill" id="rank-bar" style="width:0%"></div>
-          <div class="rank-bar-lbl"  id="rank-bar-lbl"></div>
-        </div>
-      </div>
-
-      <!-- Charts -->
-      <div class="charts-row">
-        <div class="chart-panel">
-          <div class="chart-title" style="display:flex;align-items:center;justify-content:space-between">
-            <span>90-Day Sales Trend</span>
-            <div class="trend-toggle">
-              <button id="trend-btn-daily"  class="trend-btn active" onclick="setTrendView('daily')">Daily</button>
-              <button id="trend-btn-weekly" class="trend-btn"        onclick="setTrendView('weekly')">Weekly</button>
-            </div>
-          </div>
-          <div class="chart-container"><canvas id="chart-trend"></canvas></div>
-        </div>
-        <div class="chart-panel">
-          <div class="chart-title">Store Stock Distribution</div>
-          <div class="chart-container"><canvas id="chart-stores"></canvas></div>
-        </div>
-        <div class="chart-panel">
-          <div class="chart-title">90D Actual vs Expected</div>
-          <div class="chart-container"><canvas id="chart-compare"></canvas></div>
-        </div>
-      </div>
-
-      <!-- Inventory table -->
-      <div class="card" style="margin-bottom:16px">
-        <div class="card-title">Inventory Summary</div>
-        <div class="inv-summary" id="inv-summary"></div>
-        <div class="inv-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Store</th>
-                <th class="num-ctr">30D Sales</th>
-                <th class="num-ctr">30D Revenue</th>
-                <th class="num-ctr">90D Sales</th>
-                <th class="num-ctr">90D Revenue</th>
-                <th class="num-ctr">Qty Available</th>
-                <th class="num-ctr">Clearance 30D</th>
-                <th class="num-ctr">MOS 30D</th>
-              </tr>
-            </thead>
-            <tbody id="inv-body"></tbody>
-          </table>
-        </div>
-      </div>
-
-    </div><!-- /#item-view -->
-  </div><!-- /#tab-item -->
-
-  <!-- Category Performance tab panel -->
-  <div id="tab-category" class="tab-panel" style="display:none">
-    <div id="cat-view-content"></div>
-  </div>
-
-  <!-- Store Performance tab panel -->
-  <div id="tab-store" class="tab-panel" style="display:none">
+  <!-- Account Performance tab panel (default active) -->
+  <div id="tab-store" class="tab-panel" style="display:flex">
     <div id="store-view-content"></div>
   </div>
 
+  <!-- Customer Account tab panel -->
+  <div id="tab-item" class="tab-panel" style="display:none;flex-direction:column">
+    <div id="customer-account-panel" style="flex:1;display:flex;flex-direction:column"></div>
+  </div>
+
+  <!-- Item Performance tab panel -->
+  <div id="tab-category" class="tab-panel" style="display:none;flex-direction:column">
+    <div id="item-perf-panel" style="flex:1;display:flex;flex-direction:column"></div>
+  </div>
+
 </div><!-- /#app-content -->
+
+<!-- ── AI Assistant floating button (shown only on Customer Account tab) ── -->
+<button id="ca-ai-tab" onclick="toggleAIDrawer()" title="AI Sales Assistant"
+  style="display:none;position:fixed;bottom:32px;right:32px;z-index:2000;width:72px;height:72px;border-radius:50%;background:#0d9488;color:#fff;border:none;cursor:pointer;box-shadow:0 4px 20px rgba(13,148,136,0.5),0 2px 8px rgba(0,0,0,0.2);flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:0;font-family:inherit;transition:transform 0.15s,box-shadow 0.15s"
+  onmouseenter="this.style.transform='scale(1.08)';this.style.boxShadow='0 6px 28px rgba(13,148,136,0.6),0 3px 12px rgba(0,0,0,0.25)'"
+  onmouseleave="this.style.transform='scale(1)';this.style.boxShadow='0 4px 20px rgba(13,148,136,0.5),0 2px 8px rgba(0,0,0,0.2)'">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+  <span style="font-size:10px;font-weight:700;letter-spacing:0.3px;line-height:1">AI</span>
+</button>
 
 <!-- ── Footer ──────────────────────────────────────────────── -->
 <div class="dash-footer">
@@ -360,91 +269,91 @@
 </div>
 
 <script>
-  // ── Item search modal ────────────────────────────────────────
-  const _BASE_SEARCH = `${window.location.protocol}//${window.location.hostname}:3001/proxy`;
-  let _searchTimer = null;
+  // ── Customer Account inline search ────────────────────────────
+  let _caSearchTimer = null;
+  let _caSearchResults = [];
+  let _caSearchActive = -1;
 
-  function openSearchModal() {
-    document.getElementById('search-modal-overlay').classList.add('open');
-    const inp = document.getElementById('search-modal-input');
-    inp.value = '';
-    document.getElementById('search-modal-results').innerHTML =
-      '<div class="search-modal-hint">Type to search items...</div>';
-    setTimeout(() => inp.focus(), 50);
-  }
-
-  function closeSearchModal() {
-    document.getElementById('search-modal-overlay').classList.remove('open');
-    clearTimeout(_searchTimer);
-  }
-
-  function searchModalGo() {
-    const first = document.querySelector('.search-modal-row');
-    if (first) first.click();
-  }
-
-  // Close on overlay click (outside the modal box)
-  document.getElementById('search-modal-overlay').addEventListener('click', function(e) {
-    if (e.target === this) closeSearchModal();
-  });
-
-  document.getElementById('search-modal-input').addEventListener('input', function() {
-    clearTimeout(_searchTimer);
-    const q = this.value.trim();
-    const results = document.getElementById('search-modal-results');
-    if (q.length < 2) {
-      results.innerHTML = '<div class="search-modal-hint">Type to search items...</div>';
-      return;
+  function caSearchDismiss(e) {
+    const bar = document.getElementById('tab-ca-search');
+    if (bar && !bar.contains(e.target)) {
+      const dd = document.getElementById('ca-search-dropdown');
+      if (dd) dd.style.display = 'none';
     }
-    results.innerHTML = '<div class="search-modal-hint">Searching...</div>';
-    _searchTimer = setTimeout(async () => {
-      try {
-        const resp = await fetch(`${_BASE_SEARCH}/items/search?q=${encodeURIComponent(q)}`);
-        const rows = resp.ok ? await resp.json() : [];
-        if (!rows.length) {
-          results.innerHTML = '<div class="search-modal-hint">No results found.</div>';
-          return;
-        }
-        results.innerHTML = '';
-        rows.forEach(r => {
-          const row = document.createElement('div');
-          row.className = 'search-modal-row';
-          row.innerHTML =
-            `<span class="search-modal-num">${r.itemNo}</span>` +
-            `<span class="search-modal-name">${r.name}</span>` +
-            `<span class="search-modal-badge">${r.category}${r.subcat ? ' / ' + r.subcat : ''}</span>`;
-          row.addEventListener('click', () => {
-            closeSearchModal();
-            if (typeof doSearch === 'function') doSearch(r.itemNo);
-          });
-          results.appendChild(row);
-        });
-      } catch (_) {
-        results.innerHTML = '<div class="search-modal-hint">Error fetching results.</div>';
+  }
+
+  function caSearchSelect(idx) {
+    const r = _caSearchResults[idx];
+    if (!r) return;
+    const inp = document.getElementById('ca-search-input');
+    if (inp) inp.value = r.name + ' (' + r.custNo + ')';
+    const dd = document.getElementById('ca-search-dropdown');
+    if (dd) dd.style.display = 'none';
+    if (typeof loadCustomerAccount === 'function') loadCustomerAccount(r.custNo);
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    const inp = document.getElementById('ca-search-input');
+    if (!inp) return;
+
+    inp.addEventListener('input', function() {
+      clearTimeout(_caSearchTimer);
+      const q = this.value.trim();
+      const dd = document.getElementById('ca-search-dropdown');
+      if (q.length < 2) { if (dd) dd.style.display = 'none'; return; }
+      _caSearchTimer = setTimeout(async () => {
+        try {
+          const resp = await fetch('/proxy/customers/search?q=' + encodeURIComponent(q));
+          const rows = resp.ok ? await resp.json() : [];
+          _caSearchResults = rows;
+          _caSearchActive  = -1;
+          if (!dd) return;
+          if (!rows.length) {
+            dd.innerHTML = '<div style="padding:12px 14px;color:#9ca3af;font-size:13px">No customers found.</div>';
+          } else {
+            dd.innerHTML = rows.map((r, i) =>
+              '<div style="padding:9px 14px;cursor:pointer;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;gap:10px" ' +
+              'onclick="caSearchSelect(' + i + ')" ' +
+              'onmouseenter="this.style.background=\'#f0f4f8\'" onmouseleave="this.style.background=\'\'">' +
+              '<span style="font-family:monospace;font-size:11px;font-weight:700;color:#3d5a80;min-width:72px">' + r.custNo + '</span>' +
+              '<span style="font-size:13px;color:#1a2332;flex:1">' + r.name + '</span>' +
+              (r.state ? '<span style="font-size:11px;color:#9ca3af">' + r.state + '</span>' : '') +
+              '</div>'
+            ).join('');
+          }
+          dd.style.display = 'block';
+        } catch (_) {}
+      }, 280);
+    });
+
+    inp.addEventListener('keydown', function(e) {
+      const dd   = document.getElementById('ca-search-dropdown');
+      const rows = dd ? dd.querySelectorAll('div[onclick]') : [];
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        _caSearchActive = Math.min(_caSearchActive + 1, rows.length - 1);
+        rows.forEach((r, i) => r.style.background = i === _caSearchActive ? '#f0f4f8' : '');
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        _caSearchActive = Math.max(_caSearchActive - 1, 0);
+        rows.forEach((r, i) => r.style.background = i === _caSearchActive ? '#f0f4f8' : '');
+      } else if (e.key === 'Enter') {
+        if (_caSearchActive >= 0) caSearchSelect(_caSearchActive);
+        else if (_caSearchResults.length) caSearchSelect(0);
+      } else if (e.key === 'Escape') {
+        if (dd) dd.style.display = 'none';
       }
-    }, 300);
-  });
+    });
 
-  document.getElementById('search-modal-input').addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') closeSearchModal();
-    if (e.key === 'Enter') {
-      const first = document.querySelector('.search-modal-row');
-      if (first) first.click();
-    }
-  });
-
-  // Plain nav search input — Enter key fires doSearch
-  document.getElementById('item-search').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') doSearch();
+    document.addEventListener('click', caSearchDismiss);
   });
 </script>
 <script src="js/utils.js"></script>
-<script src="js/math.js"></script>
 <script src="js/data-loader.js"></script>
-<script src="js/charts.js"></script>
-<script src="js/views/item-zoom.js"></script>
-<script src="js/views/category.js"></script>
-<script src="js/views/store.js"></script>
+<script src="js/ai-prompt-config.js"></script>
+<script src="js/views/accounts.js"></script>
+<script src="js/views/customer-account.js"></script>
+<script src="js/views/item-performance.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
