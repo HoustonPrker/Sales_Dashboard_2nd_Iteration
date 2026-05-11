@@ -11,8 +11,9 @@ let currentRep   = '';    // rep selected at boot — used by sub-views that nee
 // ── Tab switching ─────────────────────────────────────────────
 
 function switchTab(tab) {
-  if (activeTab === 'store'    && typeof destroyStoreCharts    === 'function') destroyStoreCharts();
-  if (activeTab === 'category' && typeof destroyItemPerfCharts === 'function') destroyItemPerfCharts();
+  if (activeTab === 'store'       && typeof destroyStoreCharts       === 'function') destroyStoreCharts();
+  if (activeTab === 'category'    && typeof destroyItemPerfCharts    === 'function') destroyItemPerfCharts();
+  if (activeTab === 'leaderboard' && typeof destroyLeaderboardCharts === 'function') destroyLeaderboardCharts();
 
   activeTab = tab;
 
@@ -20,7 +21,7 @@ function switchTab(tab) {
   const btn = document.getElementById('tab-btn-' + tab);
   if (btn) btn.classList.add('active');
 
-  ['item', 'category', 'store'].forEach(t => {
+  ['item', 'category', 'store', 'leaderboard'].forEach(t => {
     const panel = document.getElementById('tab-' + t);
     if (panel) panel.style.display = t === tab ? 'flex' : 'none';
   });
@@ -31,8 +32,9 @@ function switchTab(tab) {
   if (caBar) caBar.style.display = tab === 'item'     ? 'flex' : 'none';
   if (ipBar) ipBar.style.display = tab === 'category' ? 'flex' : 'none';
 
-  if (tab === 'store'    && dataReady) renderStoreView();
-  if (tab === 'category' && dataReady) renderItemPerformanceView();
+  if (tab === 'store'       && dataReady) renderStoreView();
+  if (tab === 'category'    && dataReady) renderItemPerformanceView();
+  if (tab === 'leaderboard' && dataReady) renderLeaderboardView();
 
   if (tab === 'item' && !caCustNo && typeof renderCAEmpty === 'function') {
     renderCAEmpty();

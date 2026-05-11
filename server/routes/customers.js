@@ -16,6 +16,10 @@ const categoryCache = require('../lib/category-cache');
 const accountsCache = {};  // { [rep]: { data, ts } }
 const CACHE_TTL     = 5 * 60 * 1000;
 
+// ── Leaderboard cache (15-minute TTL) ────────────────────────
+const leaderboardCache = { data: null, ts: 0 };
+const LEADERBOARD_TTL  = 15 * 60 * 1000;
+
 // ── Compute health tier ───────────────────────────────────────
 // Run rate: % of year elapsed, used to judge if account is pacing correctly.
 function computeTier(pctToTarget, daysSince, ytdSales, priorYtd) {
@@ -316,6 +320,129 @@ router.get('/mtd/:custNo', async (req, res) => {
     res.json({ total: +mtdTotal.toFixed(2), orderDays, orders: tickets.length });
   } catch (e) {
     console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Concurrency-limited parallel executor ─────────────────────
+async function parallelLimit(fns, limit = 20) {
+  const results = new Array(fns.length);
+  let idx = 0;
+  async function worker() {
+    while (idx < fns.length) {
+      const i = idx++;
+      results[i] = await fns[i]();
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, fns.length) }, worker));
+  return results;
+}
+
+// ── GET /proxy/leaderboard ────────────────────────────────────
+router.get('/leaderboard', async (req, res) => {
+  if (req.query.refresh !== '1' && leaderboardCache.data && Date.now() - leaderboardCache.ts < LEADERBOARD_TTL) {
+    return res.json(leaderboardCache.data);
+  }
+
+  try {
+    // 1. Fetch all customers + all active reps in parallel — two calls total
+    const [repsResp, allCustomers] = await Promise.all([
+      doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS,secCod:eq:SALES&fields=usrId,name&pageSize=500`),
+      fetchAllPages(`/api/v1/Customers?fields=custNo,salesRep,lastSaleDate&pageSize=200`),
+    ]);
+
+    const repsBody = repsResp.ok ? await repsResp.json() : {};
+    const repMap   = {};
+    (repsBody.data || [])
+      .filter(u => { const id = (u.usrId || '').toUpperCase(); return id.endsWith('-ACT') || id.endsWith('-ACTIVE'); })
+      .forEach(u => {
+        repMap[u.usrId.trim()] = (u.name || u.usrId).trim().replace(/\s*[-–]\s*(ACTIVE|ACT)$/i, '').trim();
+      });
+
+    // 2. For customers whose rep already has a warm accountsCache, use it directly.
+    //    Collect only the customers we actually need to fetch.
+    const repAccounts = {}; // repId → [{ ytdSales, priorYtd, tier }]
+    Object.keys(repMap).forEach(id => { repAccounts[id] = []; });
+
+    const toFetch = []; // customers needing a live sales-by-category call
+
+    for (const c of allCustomers) {
+      const repId = (c.salesRep || '').trim();
+      if (!repMap[repId]) continue; // not an active rep we care about
+
+      const cached = accountsCache[repId];
+      if (cached && Date.now() - cached.ts < CACHE_TTL) {
+        // Already have full account objects for this rep — no individual fetch needed
+        continue;
+      }
+      toFetch.push(c);
+    }
+
+    // 3. Fire all outstanding sales-by-category calls at full parallelism (capped at 20)
+    const fetchResults = await parallelLimit(toFetch.map(c => async () => {
+      try {
+        const r    = await doFetch('GET', `/api/v1/Customers/${encodeURIComponent(c.custNo)}/sales-by-category`);
+        const body = r.ok ? await r.json() : [];
+        const rows = Array.isArray(body) ? body : (body.data || []);
+        const ytd   = rows.reduce((s, r) => s + (parseFloat(r.currentYtdAmount) || 0), 0);
+        const prior = rows.reduce((s, r) => s + (parseFloat(r.priorYtdAmount)   || 0), 0);
+        const lastDate  = c.lastSaleDate ? c.lastSaleDate.slice(0, 10) : null;
+        const daysSince = lastDate ? Math.floor((Date.now() - new Date(lastDate)) / 86400000) : 999;
+        return { repId: (c.salesRep || '').trim(), ytdSales: ytd, priorYtd: prior,
+                 tier: computeTier(prior > 0 ? ytd / prior : 0, daysSince, ytd, prior) };
+      } catch (_) {
+        return { repId: (c.salesRep || '').trim(), ytdSales: 0, priorYtd: 0, tier: 'AtRisk' };
+      }
+    }), 20);
+
+    // Merge live fetch results
+    for (const row of fetchResults) {
+      if (repAccounts[row.repId]) repAccounts[row.repId].push(row);
+    }
+
+    // Merge cached rep accounts
+    for (const repId of Object.keys(repMap)) {
+      const cached = accountsCache[repId];
+      if (cached && Date.now() - cached.ts < CACHE_TTL) {
+        repAccounts[repId] = cached.data;
+      }
+    }
+
+    // 4. Aggregate per rep
+    const now     = new Date();
+    const quarter = Math.ceil((now.getMonth() + 1) / 3);
+
+    const repStats = Object.entries(repMap).map(([repId, repName]) => {
+      const accounts = repAccounts[repId] || [];
+      const ytd   = accounts.reduce((s, a) => s + (a.ytdSales || 0), 0);
+      const prior = accounts.reduce((s, a) => s + (a.priorYtd || 0), 0);
+      const tiers = { Healthy: 0, Attention: 0, AtRisk: 0, Critical: 0 };
+      accounts.forEach(a => { if (tiers[a.tier] !== undefined) tiers[a.tier]++; });
+      const healthScore = accounts.length > 0
+        ? Math.round((tiers.Healthy * 100 + tiers.Attention * 60 + tiers.AtRisk * 25) / accounts.length)
+        : 0;
+      return {
+        repId, repName,
+        ytdSales:     +ytd.toFixed(2),
+        priorYtd:     +prior.toFixed(2),
+        pctToTarget:  prior > 0 ? +(ytd / prior).toFixed(4) : 0,
+        pctChange:    prior > 0 ? +((ytd - prior) / prior).toFixed(4) : null,
+        accountCount: accounts.length,
+        healthScore,
+        ...tiers,
+      };
+    });
+
+    const ranked = repStats
+      .filter(r => r.accountCount > 0)
+      .sort((a, b) => b.ytdSales - a.ytdSales)
+      .map((r, i) => ({ ...r, rank: i + 1 }));
+
+    leaderboardCache.data = { reps: ranked, quarter, year: now.getFullYear(), updatedAt: now.toISOString() };
+    leaderboardCache.ts   = Date.now();
+    res.json(leaderboardCache.data);
+  } catch (e) {
+    console.error('/proxy/leaderboard error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

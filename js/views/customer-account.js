@@ -106,7 +106,7 @@ function renderCAEmpty() {
       </div>
     </div>
 
-    <div class="kpi-row" style="grid-template-columns:repeat(7,1fr)">
+    <div class="kpi-row" style="grid-template-columns:repeat(8,1fr)">
       ${emptyKpi('YTD Sales',       'Current year to date')}
       ${emptyKpi('% to Target',     'vs prior same period')}
       ${emptyKpi('Prior YTD',       'Same period last year')}
@@ -114,6 +114,7 @@ function renderCAEmpty() {
       ${emptyKpi('Month to Date',   'This month')}
       ${emptyKpi('Days Since Order','Last order date')}
       ${emptyKpi('Target (Annual)', 'Prior YTD baseline')}
+      ${emptyKpi('CSAT Score',      'Satisfaction score')}
     </div>
 
     <div class="rank-strip" style="margin-bottom:12px">
@@ -250,7 +251,7 @@ function renderCA(cust, catData, mtd, orders) {
     </div>
 
     <!-- KPI row -->
-    <div class="kpi-row" style="grid-template-columns:repeat(7,1fr)">
+    <div class="kpi-row" style="grid-template-columns:repeat(8,1fr)">
       <div class="kpi-card kpi-card-sales">
         <div class="kpi-lbl">YTD Sales</div>
         <div class="kpi-val" style="font-size:26px">${fmt$(ytdTotal)}</div>
@@ -286,6 +287,7 @@ function renderCA(cust, catData, mtd, orders) {
         <div class="kpi-val" style="font-size:26px">${target > 0 ? fmt$(target) : '—'}</div>
         <div class="kpi-sub">Prior YTD baseline</div>
       </div>
+      ${buildCSATCard({ custNo, daysSinceOrder: daysSince, pctChange, pctToTarget: pctToTgt })}
     </div>
 
     <!-- Progress bar -->

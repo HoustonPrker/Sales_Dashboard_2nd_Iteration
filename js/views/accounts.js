@@ -67,6 +67,7 @@ function renderAccountsOverview() {
       case 'custNo':      return dir * (a.custNo || '').localeCompare(b.custNo || '');
       case 'state':       return dir * (a.state || '').localeCompare(b.state || '');
       case 'tier':        return dir * (a.tier || '').localeCompare(b.tier || '');
+      case 'csat':        return dir * (csatResolve(a).score - csatResolve(b).score);
       case 'ytdSales':    return dir * (a.ytdSales    - b.ytdSales);
       case 'target':      return dir * (a.target      - b.target);
       case 'pctToTarget': return dir * (a.pctToTarget - b.pctToTarget);
@@ -92,6 +93,7 @@ function renderAccountsOverview() {
     { key: 'custNo',      label: 'Acct #',             cls: 'num-ctr' },
     { key: 'state',       label: 'State',               cls: 'num-ctr' },
     { key: 'tier',        label: 'Tier',                cls: 'num-ctr' },
+    { key: 'csat',        label: 'CSAT',                cls: 'num-ctr' },
     { key: 'ytdSales',    label: 'YTD Sales',           cls: 'num-ctr' },
     { key: 'target',      label: 'Target',              cls: 'num-ctr' },
     { key: 'pctToTarget', label: '% to Target',         cls: 'num-ctr' },
@@ -128,11 +130,24 @@ function renderAccountsOverview() {
     const rowBg = tierKey === 'Critical' ? 'background:#fff5f5'
                 : tierKey === 'AtRisk'   ? 'background:#fff8f0' : '';
 
+    const { score: csatScore, isOverride: csatIsOv } = csatResolve(a);
+    const csatClr = csatColor(csatScore);
+    const csatLbl = csatLabel(csatScore);
+
     return `<tr style="${rowBg}">
       <td><a class="acct-name-link" onclick="openCustomerAccount('${a.custNo}')">${a.name || '—'}</a></td>
       <td class="num-ctr" style="font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80">${a.custNo}</td>
       <td class="num-ctr">${a.state || '—'}</td>
       <td class="num-ctr"><span class="tier-badge ${tierCls}">${tierLabel}</span></td>
+      <td class="num-ctr">
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+          <span style="font-size:13px;font-weight:700;color:${csatClr}">${csatScore} <span style="font-weight:400;font-size:11px">${csatLbl}</span></span>
+          <div style="width:60px;height:4px;background:#e5e7eb;border-radius:2px;overflow:hidden">
+            <div style="width:${csatScore}%;height:100%;background:${csatClr};border-radius:2px"></div>
+          </div>
+          ${csatIsOv ? '<span style="font-size:9px;color:#9ca3af;line-height:1">rep</span>' : ''}
+        </div>
+      </td>
       <td class="num-ctr">${fmt$(a.ytdSales)}</td>
       <td class="num-ctr">${a.target > 0 ? fmt$(a.target) : '—'}</td>
       <td class="num-ctr"><span class="${pctTgtCls}">${pctTgt}</span></td>
@@ -338,6 +353,7 @@ function acctSortBy(col) {
   } else {
     acctSortCol = col;
     acctSortDir = (col === 'name' || col === 'state' || col === 'tier' || col === 'lastOrder') ? 'asc' : 'desc';
+    if (col === 'csat') acctSortDir = 'desc';
   }
   renderAccountsOverview();
 }

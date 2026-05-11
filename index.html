@@ -188,8 +188,9 @@
 <!-- ── Tab Bar ─────────────────────────────────────────────── -->
 <div class="tab-bar">
   <button class="tab-btn active" id="tab-btn-store"    onclick="switchTab('store')">Account Performance</button>
+
   <button class="tab-btn"        id="tab-btn-item"     onclick="switchTab('item')">Customer Account</button>
-  <!-- Customer search — shown only when Customer Account tab is active -->
+  <!-- Customer search — visible only when Customer Account tab is active -->
   <div id="tab-ca-search" style="display:none;align-items:center;padding:6px 0 6px 4px;position:relative">
     <div style="position:relative">
       <svg style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,0.5);pointer-events:none" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
@@ -207,7 +208,7 @@
   </div>
 
   <button class="tab-btn"        id="tab-btn-category" onclick="switchTab('category')">Item Performance</button>
-  <!-- Item search — shown only when Item Performance tab is active -->
+  <!-- Item search — visible only when Item Performance tab is active -->
   <div id="tab-ip-search" style="display:none;align-items:center;padding:6px 0 6px 4px;position:relative">
     <div style="position:relative">
       <svg style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,0.5);pointer-events:none" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
@@ -223,6 +224,8 @@
       </div>
     </div>
   </div>
+
+  <button class="tab-btn"        id="tab-btn-leaderboard" onclick="switchTab('leaderboard')">🏆 Leaderboard</button>
 </div>
 
 <!-- ── Loading Screen ──────────────────────────────────────── -->
@@ -250,6 +253,11 @@
   <!-- Item Performance tab panel -->
   <div id="tab-category" class="tab-panel" style="display:none;flex-direction:column">
     <div id="item-perf-panel" style="flex:1;display:flex;flex-direction:column"></div>
+  </div>
+
+  <!-- Leaderboard tab panel -->
+  <div id="tab-leaderboard" class="tab-panel" style="display:none">
+    <div id="leaderboard-panel" style="flex:1;display:flex;flex-direction:column"></div>
   </div>
 
 </div><!-- /#app-content -->
@@ -349,11 +357,13 @@
   });
 </script>
 <script src="js/utils.js"></script>
+<script src="js/csat.js"></script>
 <script src="js/data-loader.js"></script>
 <script src="js/ai-prompt-config.js"></script>
 <script src="js/views/accounts.js"></script>
 <script src="js/views/customer-account.js"></script>
 <script src="js/views/item-performance.js"></script>
+<script src="js/views/leaderboard.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
