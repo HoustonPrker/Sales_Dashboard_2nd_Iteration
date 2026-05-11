@@ -8,6 +8,7 @@ let acctSortCol    = 'ytdSales', acctSortDir = 'desc';
 let acctTierFilter = 'All';
 let acctRepFilter  = 'All';
 let acctViewCharts = {};
+let acctOverviewData = null; // cached rep-overview API response
 
 const HEALTH_COLORS = {
   Healthy:   '#059669',
@@ -32,6 +33,179 @@ const acctTooltipDefaults = {
 function renderStoreView() {
   if (!dataReady) return;
   renderAccountsOverview();
+  fetchRepOverview();
+}
+
+// ── Rep Overview KPI fetch ─────────────────────────────────────
+
+async function fetchRepOverview() {
+  const rep = (typeof currentRep !== 'undefined' ? currentRep : '').trim();
+  if (!rep) return;
+  try {
+    const res = await fetch(`/proxy/rep-overview?rep=${encodeURIComponent(rep)}`);
+    if (!res.ok) return;
+    acctOverviewData = await res.json();
+    renderOverviewKpis();
+  } catch (_) {}
+}
+
+function renderOverviewKpis() {
+  const el = document.getElementById('acct-overview-kpis');
+  if (!el || !acctOverviewData) return;
+  const d = acctOverviewData;
+
+  const totalAccounts  = (accountsData || []).length;
+  const activeAccounts = d.monthly.activeAccounts;
+
+  const runRatePct   = (d.yearRunRate * 100).toFixed(1);
+  const mtdPct       = (d.monthly.pctToGoal * 100).toFixed(1);
+  const bsPct        = (d.bestSeller.pct * 100).toFixed(1);
+  const activeAccPct = totalAccounts > 0 ? ((activeAccounts / totalAccounts) * 100).toFixed(0) : 0;
+
+  const mtdColor   = d.monthly.pctToGoal >= 1.0 ? '#059669' : d.monthly.pctToGoal >= 0.75 ? '#d97706' : '#dc2626';
+  const bsColor    = d.bestSeller.pct >= 0.5 ? '#059669' : d.bestSeller.pct >= 0.3 ? '#d97706' : '#dc2626';
+  const dailyColor = d.monthly.dailySalesNeeded > 0 ? '#d97706' : '#059669';
+
+  const ticketChg = d.avg.ticketPrior > 0
+    ? ((d.avg.ticketCurrent - d.avg.ticketPrior) / d.avg.ticketPrior * 100).toFixed(1)
+    : null;
+  const linesChg = d.avg.linesPrior > 0
+    ? ((d.avg.linesCurrent - d.avg.linesPrior) / d.avg.linesPrior * 100).toFixed(1)
+    : null;
+
+  const chgBadge = v => {
+    if (v === null) return '<span class="mgr-bench-chg neutral">no prior yr</span>';
+    const n = parseFloat(v);
+    const cls = n >= 0 ? 'up' : 'down';
+    const sign = n >= 0 ? '↑' : '↓';
+    return `<span class="mgr-bench-chg ${cls}">${sign} ${Math.abs(v)}%</span>`;
+  };
+
+  const totalYtd      = (accountsData || []).reduce((s, a) => s + a.ytdSales, 0);
+  const totalAcctsFmt = totalAccounts.toLocaleString();
+
+  const pill = (label, value, sub, valueStyle) => `
+    <div class="mgr-pill">
+      <div class="mgr-pill-label">${label}</div>
+      <div class="mgr-pill-value" style="${valueStyle || ''}">${value}</div>
+      ${sub ? `<div class="mgr-pill-sub">${sub}</div>` : ''}
+    </div>`;
+
+  const bsValueColor = bsColor === '#059669' ? '#86efac' : bsColor === '#d97706' ? '#fcd34d' : '#fca5a5';
+
+  el.innerHTML = `
+    <div class="mgr-panel">
+      <div style="display:flex;gap:0;align-items:stretch">
+
+        <!-- Left: donut chart (click slice to filter grid) -->
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:240px;width:240px;padding:8px 20px 8px 4px;border-right:1px solid rgba(255,255,255,0.12);margin-right:20px;flex-shrink:0">
+          <canvas id="acct-donut-chart" style="max-height:200px;cursor:pointer" title="Click a slice to filter by tier"></canvas>
+        </div>
+
+        <!-- Right: 2-row KPI grid -->
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px;padding:4px 0">
+          <!-- Row 1 — 6 pills -->
+          <div class="mgr-pill-row">
+            <div class="mgr-pill">
+              <div class="mgr-pill-label">Year Run Rate</div>
+              <div class="mgr-pill-value">${runRatePct}%</div>
+              <div class="mgr-pill-sub">${d.businessDaysElapsed} of ${d.businessDaysTotal} days elapsed</div>
+            </div>
+            ${pill('Total Accounts',  totalAcctsFmt,         'all rep accounts')}
+            ${pill('Total YTD Sales', fmt$(totalYtd),         'current year to date')}
+            ${pill('Monthly Goal',    fmt$(d.monthly.goal),   'prior yr same month')}
+            ${pill('MTD Sales',       fmt$(d.monthly.mtd),    `${d.monthly.remainingBusinessDays} biz days left`)}
+            ${pill('MTD %',           mtdPct + '%',           'of monthly goal')}
+          </div>
+
+          <!-- Row 2 — 6 pills -->
+          <div class="mgr-pill-row">
+            ${pill('Daily Needed',    d.monthly.dailySalesNeeded > 0 ? fmt$(d.monthly.dailySalesNeeded) : '—', 'to close gap')}
+            ${pill('Active Accounts', `${activeAccounts} <span style="opacity:0.55;font-size:14px;font-weight:500">/ ${totalAccounts}</span>`, `${activeAccPct}% ordered this month`)}
+            ${pill('Avg Ticket (CY)', fmt$(d.avg.ticketCurrent), 'current year YTD')}
+            ${pill('Avg Ticket (PY)', fmt$(d.avg.ticketPrior),
+              ticketChg !== null
+                ? (parseFloat(ticketChg) >= 0
+                    ? `<span class="mgr-chg-up">↑ ${ticketChg}% vs prior</span>`
+                    : `<span class="mgr-chg-down">↓ ${Math.abs(ticketChg)}% vs prior</span>`)
+                : 'no prior yr data')}
+            ${pill('Avg Lines (CY)',  d.avg.linesCurrent.toFixed(1), 'lines per ticket CY')}
+            ${pill('Best Sellers on PO', bsPct + '%', `${d.bestSeller.lines} of ${d.bestSeller.total} lines`)}
+          </div>
+        </div>
+
+      </div>
+    </div>`;
+
+  // Render donut now that the canvas is in the DOM
+  renderAccountsDonut();
+}
+
+function renderAccountsDonut() {
+  const full = accountsData || [];
+  const donutCtx = document.getElementById('acct-donut-chart');
+  if (!donutCtx) return;
+  if (acctViewCharts.donut) { try { acctViewCharts.donut.destroy(); } catch (_) {} }
+
+  // tier order matches label index used in onClick
+  const tiers      = ['Healthy', 'Attention', 'AtRisk', 'Critical'];
+  const labels     = ['Healthy', 'Attention', 'At Risk', 'Critical'];
+  const counts     = tiers.map(t => full.filter(a => a.tier === t).length);
+  const isFiltered = acctTierFilter !== 'All';
+  const bgColors   = tiers.map(t => {
+    const base = HEALTH_COLORS[t];
+    return (!isFiltered || t === acctTierFilter) ? base : base + '44';
+  });
+
+  acctViewCharts.donut = new Chart(donutCtx.getContext('2d'), {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{ data: counts, backgroundColor: bgColors, borderColor: 'rgba(255,255,255,0.15)', borderWidth: 2 }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      cutout: '52%',
+      onClick(evt, elements) {
+        if (!elements.length) {
+          // Clicked outside any slice — reset to All
+          setAcctTierFilter('All');
+          return;
+        }
+        const clickedTier = tiers[elements[0].index];
+        // Toggle: clicking the already-active tier resets to All
+        setAcctTierFilter(acctTierFilter === clickedTier ? 'All' : clickedTier);
+      },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'bottom',
+          labels: {
+            font: { size: 12, family: 'Inter, sans-serif', weight: '600' },
+            color: '#fff',
+            boxWidth: 12,
+            boxHeight: 12,
+            padding: 12,
+            usePointStyle: false,
+          },
+          onClick(evt, legendItem) {
+            const tier = tiers[legendItem.index];
+            setAcctTierFilter(acctTierFilter === tier ? 'All' : tier);
+          },
+        },
+        tooltip: {
+          ...acctTooltipDefaults,
+          callbacks: {
+            label: ctx => {
+              const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+              return ` ${ctx.parsed} accounts (${total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : 0}%)`;
+            }
+          }
+        }
+      }
+    }
+  });
 }
 
 function destroyStoreCharts() {
@@ -67,7 +241,6 @@ function renderAccountsOverview() {
       case 'custNo':      return dir * (a.custNo || '').localeCompare(b.custNo || '');
       case 'state':       return dir * (a.state || '').localeCompare(b.state || '');
       case 'tier':        return dir * (a.tier || '').localeCompare(b.tier || '');
-      case 'csat':        return dir * (csatResolve(a).score - csatResolve(b).score);
       case 'ytdSales':    return dir * (a.ytdSales    - b.ytdSales);
       case 'target':      return dir * (a.target      - b.target);
       case 'pctToTarget': return dir * (a.pctToTarget - b.pctToTarget);
@@ -93,7 +266,6 @@ function renderAccountsOverview() {
     { key: 'custNo',      label: 'Acct #',             cls: 'num-ctr' },
     { key: 'state',       label: 'State',               cls: 'num-ctr' },
     { key: 'tier',        label: 'Tier',                cls: 'num-ctr' },
-    { key: 'csat',        label: 'CSAT',                cls: 'num-ctr' },
     { key: 'ytdSales',    label: 'YTD Sales',           cls: 'num-ctr' },
     { key: 'target',      label: 'Target',              cls: 'num-ctr' },
     { key: 'pctToTarget', label: '% to Target',         cls: 'num-ctr' },
@@ -130,24 +302,11 @@ function renderAccountsOverview() {
     const rowBg = tierKey === 'Critical' ? 'background:#fff5f5'
                 : tierKey === 'AtRisk'   ? 'background:#fff8f0' : '';
 
-    const { score: csatScore, isOverride: csatIsOv } = csatResolve(a);
-    const csatClr = csatColor(csatScore);
-    const csatLbl = csatLabel(csatScore);
-
     return `<tr style="${rowBg}">
       <td><a class="acct-name-link" onclick="openCustomerAccount('${a.custNo}')">${a.name || '—'}</a></td>
       <td class="num-ctr" style="font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80">${a.custNo}</td>
       <td class="num-ctr">${a.state || '—'}</td>
       <td class="num-ctr"><span class="tier-badge ${tierCls}">${tierLabel}</span></td>
-      <td class="num-ctr">
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
-          <span style="font-size:13px;font-weight:700;color:${csatClr}">${csatScore} <span style="font-weight:400;font-size:11px">${csatLbl}</span></span>
-          <div style="width:60px;height:4px;background:#e5e7eb;border-radius:2px;overflow:hidden">
-            <div style="width:${csatScore}%;height:100%;background:${csatClr};border-radius:2px"></div>
-          </div>
-          ${csatIsOv ? '<span style="font-size:9px;color:#9ca3af;line-height:1">rep</span>' : ''}
-        </div>
-      </td>
       <td class="num-ctr">${fmt$(a.ytdSales)}</td>
       <td class="num-ctr">${a.target > 0 ? fmt$(a.target) : '—'}</td>
       <td class="num-ctr"><span class="${pctTgtCls}">${pctTgt}</span></td>
@@ -158,36 +317,22 @@ function renderAccountsOverview() {
     </tr>`;
   }).join('') || '<tr><td colspan="11" style="padding:20px;color:#9ca3af;text-align:center">No accounts found.</td></tr>';
 
-  const behindCls = behindTarget > 0 ? 'color:#dc2626;font-weight:700' : '';
-  const noOrdCls  = noOrders30   > 0 ? 'color:#dc2626;font-weight:700' : '';
-
   document.getElementById('store-view-content').innerHTML = `
-    <div class="cat-stat-bar">
-      <div class="cat-stat-item"><span class="cat-stat-lbl">Accounts:</span><span class="cat-stat-val">${total}</span></div>
-      <span class="cat-stat-sep">·</span>
-      <div class="cat-stat-item"><span class="cat-stat-lbl">YTD Sales:</span><span class="cat-stat-val">${fmt$(totalYtd)}</span></div>
-      <span class="cat-stat-sep">·</span>
-      <div class="cat-stat-item"><span class="cat-stat-lbl">Behind Target:</span><span class="cat-stat-val" style="${behindCls}">${behindTarget}</span></div>
-      <span class="cat-stat-sep">·</span>
-      <div class="cat-stat-item"><span class="cat-stat-lbl">No Orders 30+ Days:</span><span class="cat-stat-val" style="${noOrdCls}">${noOrders30}</span></div>
-      <span class="cat-stat-sep">·</span>
-      <div class="cat-stat-item"><span class="cat-stat-lbl">Growing:</span><span class="cat-stat-val" style="color:#059669">${growing}</span></div>
-      <span class="cat-stat-sep">·</span>
-      <div class="cat-stat-item"><span class="cat-stat-lbl">Declining:</span><span class="cat-stat-val" style="color:#dc2626">${declining}</span></div>
-    </div>
-
-    <div class="chart-row-3">
-      <div class="chart-panel">
-        <div class="chart-panel-title">Top 15 Accounts — YTD Sales</div>
-        <div class="chart-container" style="height:350px"><canvas id="acct-bar-chart"></canvas></div>
-      </div>
-      <div class="chart-panel">
-        <div class="chart-panel-title">Accounts by Health Tier</div>
-        <div class="chart-container" style="height:350px"><canvas id="acct-donut-chart"></canvas></div>
-      </div>
-      <div class="chart-panel">
-        <div class="chart-panel-title">YTD Sales vs Prior YTD</div>
-        <div class="chart-container" style="height:350px"><canvas id="acct-scatter-chart"></canvas></div>
+    <div id="acct-overview-kpis">
+      <div class="mgr-panel">
+        <div style="display:flex;gap:0;align-items:stretch;opacity:0.35">
+          <div style="min-width:240px;width:240px;padding:8px 20px 8px 4px;border-right:1px solid rgba(255,255,255,0.12);margin-right:20px;flex-shrink:0"></div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:8px;padding:4px 0">
+            <div class="mgr-pill-row">
+              ${['Year Run Rate','Total Accounts','Total YTD Sales','Monthly Goal','MTD Sales','MTD %'].map(lbl => `
+                <div class="mgr-pill"><div class="mgr-pill-label">${lbl}</div><div class="mgr-pill-value">—</div></div>`).join('')}
+            </div>
+            <div class="mgr-pill-row">
+              ${['Daily Needed','Active Accounts','Avg Ticket (CY)','Avg Ticket (PY)','Avg Lines (CY)','Best Sellers on PO'].map(lbl => `
+                <div class="mgr-pill"><div class="mgr-pill-label">${lbl}</div><div class="mgr-pill-value">—</div></div>`).join('')}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -202,142 +347,101 @@ function renderAccountsOverview() {
       </table>
     </div>`;
 
-  setTimeout(() => renderAccountsCharts(byRep), 0);
+  setTimeout(() => renderAccountsCharts(list, byRep), 0);
+  if (acctOverviewData) renderOverviewKpis();
 }
 
 // ── Charts ────────────────────────────────────────────────────
 
-function renderAccountsCharts(accounts) {
-  // ── Bar: top 15 accounts by YTD sales ────────────────────────
-  const top15 = [...accounts].sort((a, b) => b.ytdSales - a.ytdSales).slice(0, 15);
-  const barCtx = document.getElementById('acct-bar-chart');
-  if (barCtx) {
-    acctViewCharts.bar = new Chart(barCtx.getContext('2d'), {
+function renderAccountsCharts(accounts, allAccounts) {
+  // accounts  = tier-filtered list (what the table shows)
+  // allAccounts = full rep list (always used for donut distribution)
+  const full = allAccounts || accounts;
+
+  // Donut is rendered via renderAccountsDonut() called from renderOverviewKpis()
+
+  // ── Growth chart: top growers + top decliners, sorted by % change ──
+  const growthCtx  = document.getElementById('acct-scatter-chart');
+  const growthTitleEl = growthCtx && growthCtx.closest('.chart-panel')?.querySelector('.chart-panel-title');
+
+  if (growthCtx) {
+    // Only include accounts with a prior year to compare against
+    const withPrior = (acctTierFilter === 'All' ? full : accounts)
+      .filter(a => a.priorYtd > 0)
+      .map(a => ({ ...a, pctChg: (a.ytdSales - a.priorYtd) / a.priorYtd }))
+      .sort((a, b) => b.pctChg - a.pctChg);
+
+    // Show top N growers + top N decliners; cap so chart stays readable
+    const CAP = accounts.length <= 30 ? 15 : 12;
+    const growers   = withPrior.slice(0, CAP);
+    const decliners = withPrior.slice(-CAP).reverse(); // worst first
+    // Deduplicate in case account list is small
+    const declinersFiltered = decliners.filter(a => !growers.includes(a));
+    const display = [...growers, ...declinersFiltered];
+
+    const label = acctTierFilter === 'All'
+      ? `Top ${CAP} Growing · Top ${CAP} Declining`
+      : `${acctTierFilter.replace('AtRisk','At Risk')} — Growth vs Prior Year`;
+    if (growthTitleEl) growthTitleEl.textContent = label;
+
+    const labels = display.map(a => a.name.length > 20 ? a.name.slice(0, 20) + '…' : a.name);
+    const values = display.map(a => +(a.pctChg * 100).toFixed(1));
+    const colors = display.map(a => {
+      const p = a.pctChg;
+      if (p >= 0.10) return HEALTH_COLORS.Healthy;
+      if (p >= 0)    return '#6aab8e';
+      if (p >= -0.15) return HEALTH_COLORS.Attention;
+      if (p >= -0.30) return HEALTH_COLORS.AtRisk;
+      return HEALTH_COLORS.Critical;
+    });
+
+    acctViewCharts.scatter = new Chart(growthCtx.getContext('2d'), {
       type: 'bar',
       data: {
-        labels: top15.map(a => a.name.length > 22 ? a.name.slice(0, 22) + '…' : a.name),
+        labels,
         datasets: [{
-          data: top15.map(a => a.ytdSales),
-          backgroundColor: top15.map(a => HEALTH_COLORS[a.tier] || '#6b8eb5'),
+          data: values,
+          backgroundColor: colors,
           borderWidth: 0,
           borderRadius: 3,
         }]
       },
       options: {
         indexAxis: 'y',
-        responsive: true, maintainAspectRatio: false,
+        responsive: true,
+        maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
+          annotation: {},
           tooltip: {
             ...acctTooltipDefaults,
             callbacks: {
-              title: ctx => top15[ctx[0].dataIndex]?.name || '',
-              label: ctx => ` YTD Sales: ${fmt$(ctx.parsed.x)}`,
-            }
-          }
-        },
-        scales: {
-          x: { ticks: { font: { size: 11 }, color: '#6b7280', callback: v => fmtRevMM(v) }, grid: { color: 'rgba(0,0,0,0.04)' } },
-          y: { ticks: { font: { size: 11 }, color: '#374151' }, grid: { display: false } },
-        }
-      }
-    });
-  }
-
-  // ── Donut: accounts by health tier ───────────────────────────
-  const donutCtx = document.getElementById('acct-donut-chart');
-  if (donutCtx) {
-    const tiers  = ['Healthy', 'Attention', 'AtRisk', 'Critical'];
-    const counts = tiers.map(t => accounts.filter(a => a.tier === t).length);
-    acctViewCharts.donut = new Chart(donutCtx.getContext('2d'), {
-      type: 'doughnut',
-      data: {
-        labels: ['Healthy', 'Attention', 'At Risk', 'Critical'],
-        datasets: [{
-          data: counts,
-          backgroundColor: tiers.map(t => HEALTH_COLORS[t]),
-          borderColor: '#fff', borderWidth: 2,
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false, cutout: '55%',
-        plugins: {
-          legend: {
-            display: true, position: 'bottom',
-            labels: { font: { size: 11, family: 'Inter, sans-serif' }, color: '#374151', boxWidth: 12, padding: 10 },
-          },
-          tooltip: {
-            ...acctTooltipDefaults,
-            callbacks: {
+              title: ctx => display[ctx[0].dataIndex]?.name || '',
               label: ctx => {
-                const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
-                return ` ${ctx.parsed} accounts (${total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : 0}%)`;
-              }
-            }
-          }
-        }
-      }
-    });
-  }
-
-  // ── Scatter: YTD vs Prior YTD ─────────────────────────────────
-  const scatterCtx = document.getElementById('acct-scatter-chart');
-  if (scatterCtx) {
-    const maxVal = Math.max(...accounts.map(a => Math.max(a.ytdSales, a.priorYtd)), 1);
-    const datasets = ['Healthy', 'Attention', 'AtRisk', 'Critical'].map(tier => ({
-      label: tier.replace('AtRisk', 'At Risk'),
-      data: accounts
-        .filter(a => a.tier === tier && (a.ytdSales > 0 || a.priorYtd > 0))
-        .map(a => ({ x: a.priorYtd, y: a.ytdSales, name: a.name })),
-      backgroundColor: HEALTH_COLORS[tier] + 'cc',
-      borderColor:     HEALTH_COLORS[tier],
-      borderWidth: 1,
-      pointRadius: 5,
-    }));
-
-    // Diagonal reference line
-    datasets.push({
-      label: 'Flat (0% growth)',
-      data: [{ x: 0, y: 0 }, { x: maxVal, y: maxVal }],
-      type: 'line',
-      borderColor: '#d1d5db',
-      borderWidth: 1,
-      borderDash: [4, 4],
-      pointRadius: 0,
-      fill: false,
-    });
-
-    acctViewCharts.scatter = new Chart(scatterCtx.getContext('2d'), {
-      type: 'scatter',
-      data: { datasets },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            display: true, position: 'bottom',
-            labels: { font: { size: 11 }, color: '#374151', boxWidth: 12, padding: 10,
-              filter: item => item.text !== 'Flat (0% growth)' }
-          },
-          tooltip: {
-            ...acctTooltipDefaults,
-            callbacks: {
-              label: ctx => {
-                if (!ctx.raw.name) return '';
-                return [`  ${ctx.raw.name}`, `  Prior YTD: ${fmt$(ctx.raw.x)}`, `  YTD: ${fmt$(ctx.raw.y)}`];
-              }
+                const a = display[ctx[0].dataIndex];
+                const sign = ctx.parsed.x >= 0 ? '+' : '';
+                return [
+                  ` Growth: ${sign}${ctx.parsed.x}%`,
+                  ` CY YTD: ${fmt$(a.ytdSales)}`,
+                  ` PY YTD: ${fmt$(a.priorYtd)}`,
+                ];
+              },
             }
           }
         },
         scales: {
           x: {
-            ticks: { font: { size: 11 }, color: '#6b7280', callback: v => fmtRevMM(v) },
+            ticks: {
+              font: { size: 11 }, color: '#6b7280',
+              callback: v => (v >= 0 ? '+' : '') + v + '%',
+            },
             grid: { color: 'rgba(0,0,0,0.04)' },
-            title: { display: true, text: 'Prior YTD', font: { size: 11 }, color: '#6b7280' },
+            // Draw a zero line
+            border: { display: false },
           },
           y: {
-            ticks: { font: { size: 11 }, color: '#6b7280', callback: v => fmtRevMM(v) },
-            grid: { color: 'rgba(0,0,0,0.04)' },
-            title: { display: true, text: 'Current YTD', font: { size: 11 }, color: '#6b7280' },
+            ticks: { font: { size: 10 }, color: '#374151' },
+            grid: { display: false },
           },
         }
       }
@@ -353,7 +457,6 @@ function acctSortBy(col) {
   } else {
     acctSortCol = col;
     acctSortDir = (col === 'name' || col === 'state' || col === 'tier' || col === 'lastOrder') ? 'asc' : 'desc';
-    if (col === 'csat') acctSortDir = 'desc';
   }
   renderAccountsOverview();
 }
@@ -361,6 +464,7 @@ function acctSortBy(col) {
 function setAcctTierFilter(tier) {
   acctTierFilter = tier;
   renderAccountsOverview();
+  renderAccountsDonut();
 }
 
 // Navigate to Customer Account tab for the given custNo

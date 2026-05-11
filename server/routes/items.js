@@ -8,48 +8,122 @@
 
 const express  = require('express');
 const router   = express.Router();
-const { doFetch, fetchAllPages, ytdDateRange, baseItemNo, calcCadence } = require('../lib/api');
+const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, baseItemNo, calcCadence, routeTimer } = require('../lib/api');
+
+// ── Cadence label from avg days between orders ────────────────
+function cadenceLbl(avgDays) {
+  if (avgDays === null) return null;
+  if (avgDays <= 7)   return 'Weekly';
+  if (avgDays <= 16)  return 'Bi-weekly';
+  if (avgDays <= 35)  return 'Monthly';
+  if (avgDays <= 50)  return 'Every 5–6 weeks';
+  if (avgDays <= 75)  return 'Every 2 months';
+  if (avgDays <= 120) return 'Quarterly';
+  return 'Infrequent';
+}
+
+// Strip trailing R variant suffix (e.g. ITEM123R → ITEM123)
+function baseNo(n) { return (n || '').trim().replace(/R$/, '').toUpperCase(); }
+
+// ── ytd-items result cache (5 min TTL keyed by custNo::category) ─
+const ytdItemsCache = {};
+const YTD_ITEMS_TTL = 5 * 60 * 1000;
+
+// ── Category item-master cache (30 min TTL keyed by category) ──
+const catMasterCache = {};
+const CAT_MASTER_TTL = 30 * 60 * 1000;
+
+async function getCategoryItemSet(category) {
+  const cached = catMasterCache[category];
+  if (cached && Date.now() - cached.ts < CAT_MASTER_TTL) return cached;
+  const items = await fetchAllPages(
+    `/api/v1/Items?filter=categoryCode:eq:${encodeURIComponent(category)}&fields=itemNo,status,description&pageSize=500`
+  ).catch(() => []);
+  const catItemSet = new Set();
+  const statusMap  = {};
+  for (const i of items) {
+    if (!i.itemNo) continue;
+    const key = baseNo(i.itemNo);
+    catItemSet.add(key);
+    statusMap[key] = {
+      status:      (i.status || i.statusCode || 'A').toUpperCase() === 'A' ? 'A' : 'I',
+      description: i.description || '',
+    };
+  }
+  catMasterCache[category] = { catItemSet, statusMap, ts: Date.now() };
+  return catMasterCache[category];
+}
 
 // ── GET /proxy/ytd-items/:custNo/:category ────────────────────
-// Items this customer bought YTD in the given category, with order cadence
+// Items this customer bought this year OR same period last year in the category.
+// Uses Customers/{custNo}/line-items — one paginated call, no per-ticket fan-out.
 router.get('/ytd-items/:custNo/:category', async (req, res) => {
   try {
-    const custNo   = encodeURIComponent(req.params.custNo);
-    const category = req.params.category;
-    const { ytdStart, ytdEnd } = ytdDateRange();
+    const t0        = Date.now();
+    const custNoRaw = req.params.custNo;
+    const custEnc   = encodeURIComponent(custNoRaw);
+    const category  = req.params.category;
+    const cacheKey  = `${custNoRaw}::${category}`;
 
-    const lines = await fetchAllPages(
-      `/api/v1/pos/ticket-history-lines?filter=custNo:eq:${custNo},categoryCode:eq:${encodeURIComponent(category)},businessDate:gte:${ytdStart},businessDate:lte:${ytdEnd}&fields=itemNo,description,categoryCode,quantity,extPrice,businessDate&pageSize=1000`
-    );
-
-    // Aggregate by itemNo
-    const byItem = {};
-    for (const l of lines) {
-      const key = l.itemNo || '';
-      if (!key) continue;
-      if (!byItem[key]) byItem[key] = {
-        itemNo: key,
-        description:  l.description  || '',
-        categoryCode: l.categoryCode || category,
-        qty:    0, revenue: 0,
-        dates:  [],
-      };
-      byItem[key].qty     += parseFloat(l.quantity || 0);
-      byItem[key].revenue += parseFloat(l.extPrice  || 0);
-      const d = (l.businessDate || '').slice(0, 10);
-      if (d) byItem[key].dates.push(d);
+    const hit = ytdItemsCache[cacheKey];
+    if (hit && Date.now() - hit.ts < YTD_ITEMS_TTL) {
+      console.log(`⏱  GET /proxy/ytd-items → cache hit [${custNoRaw} / ${category}]`);
+      return res.json(hit.data);
     }
 
-    const result = Object.values(byItem).map(item => ({
-      itemNo:       item.itemNo,
-      description:  item.description,
-      categoryCode: item.categoryCode,
-      qty:          +item.qty.toFixed(0),
-      revenue:      +item.revenue.toFixed(2),
-      cadence:      calcCadence(item.dates.map(d => ({ date: d }))),
-      lastBought:   item.dates.sort().pop() || null,
-    })).sort((a, b) => b.revenue - a.revenue);
+    const now = new Date();
+    const yr  = now.getFullYear();
+    const mm  = String(now.getMonth() + 1).padStart(2, '0');
+    const dd  = String(now.getDate()).padStart(2, '0');
+    const today       = `${yr}-${mm}-${dd}`;
+    const ytdStart    = `${yr}-01-01`;
+    const priorStart  = `${yr - 1}-01-01`;
+    const priorEnd    = `${yr - 1}-${mm}-${dd}`;
+    const threeYrsAgo = `${yr - 3}-01-01`;
+    const catEnc      = encodeURIComponent(category);
 
+    // One parallel-paged call to the customer-scoped line-items endpoint +
+    // item status lookup in parallel — no per-ticket fan-out needed.
+    const [lineItems, { statusMap }] = await Promise.all([
+      fetchAllPagesPar(
+        `/api/v1/Customers/${custEnc}/line-items?filter=categoryCode:eq:${catEnc},businessDate:gte:${threeYrsAgo}&compact=true&pageSize=2000`
+      ),
+      getCategoryItemSet(category),
+    ]);
+
+    console.log(`  ytd-items [${category}]: lines=${lineItems.length}`);
+
+    const byItem = {};
+    for (const l of lineItems) {
+      const key  = baseNo(l.itemNo || '');
+      if (!key) continue;
+      const date = (l.businessDate || l.BusinessDate || '').slice(0, 10);
+      const qty  = parseFloat(l.quantity || 0);
+      if (!byItem[key]) byItem[key] = {
+        itemNo: key, description: l.description || statusMap[key]?.description || '',
+        qty_current: 0, qty_prior: 0, all_dates: [],
+      };
+      if (date >= ytdStart  && date <= today)      byItem[key].qty_current += qty;
+      if (date >= priorStart && date <= priorEnd)  byItem[key].qty_prior   += qty;
+      if (date) byItem[key].all_dates.push(date);
+    }
+
+    const result = Object.values(byItem)
+      .filter(i => i.qty_current > 0 || i.qty_prior > 0)
+      .sort((a, b) => b.qty_current - a.qty_current)
+      .map((item, idx) => ({
+        rank:        idx + 1,
+        itemNo:      item.itemNo,
+        description: item.description || statusMap[item.itemNo]?.description || '',
+        status:      statusMap[item.itemNo]?.status || 'A',
+        current_qty: Math.round(item.qty_current),
+        prior_qty:   Math.round(item.qty_prior),
+        cadence:     cadenceLbl(calcCadence(item.all_dates.map(d => ({ date: d })))),
+        last_sold:   [...item.all_dates].sort().pop() || null,
+      }));
+
+    ytdItemsCache[cacheKey] = { data: result, ts: Date.now() };
+    routeTimer(`GET /proxy/ytd-items`, t0, { custNo: custNoRaw, category, lines: lineItems.length, items: result.length });
     res.json(result);
   } catch (e) {
     console.error(e);
@@ -58,54 +132,82 @@ router.get('/ytd-items/:custNo/:category', async (req, res) => {
 });
 
 // ── GET /proxy/top-items/:custNo/:category ────────────────────
-// Best sellers in this category (all accounts) vs what this customer has bought
+// Store's profCod1=Y best-seller list for the category, annotated with this
+// customer's 3-year buying history. Items the customer hasn't bought included
+// as gaps (current_qty = 0). Returns: rank, itemNo, description, status,
+// current_qty, prior_qty, prior_full_qty, current_sales, prior_sales, last_sold, cadence
 router.get('/top-items/:custNo/:category', async (req, res) => {
   try {
+    const t0       = Date.now();
     const custNo   = encodeURIComponent(req.params.custNo);
     const category = req.params.category;
-    const { ytdStart, ytdEnd } = ytdDateRange();
+    const now = new Date();
+    const yr  = now.getFullYear();
+    const mm  = String(now.getMonth() + 1).padStart(2, '0');
+    const dd  = String(now.getDate()).padStart(2, '0');
+    const threeYrsAgo = `${yr - 3}-01-01`;
+    const todayStr    = `${yr}-${mm}-${dd}`;
+    const currStart   = `${yr}-01-01`;
+    const priorStart  = `${yr - 1}-01-01`;
+    const priorEnd    = `${yr - 1}-${mm}-${dd}`;
+    const priorFull   = `${yr - 1}-12-31`;
+    const catEnc = encodeURIComponent(category);
 
-    // Fetch category-wide top sellers and this customer's items in parallel
-    const [allLines, custLines] = await Promise.all([
+    // Two parallel fetches: master best-seller list + all customer line items (3 yrs)
+    // Uses customer-scoped line-items endpoint — single paginated call, no per-ticket fan-out.
+    const [masterItems, allLines] = await Promise.all([
       fetchAllPages(
-        `/api/v1/pos/ticket-history-lines?filter=categoryCode:eq:${encodeURIComponent(category)},businessDate:gte:${ytdStart},businessDate:lte:${ytdEnd}&fields=itemNo,description,quantity,extPrice&pageSize=1000`
+        `/api/v1/Items?filter=profCod1:eq:Y,categoryCode:eq:${catEnc}&fields=itemNo,description,status&pageSize=200`
       ),
-      fetchAllPages(
-        `/api/v1/pos/ticket-history-lines?filter=custNo:eq:${custNo},categoryCode:eq:${encodeURIComponent(category)},businessDate:gte:${ytdStart},businessDate:lte:${ytdEnd}&fields=itemNo,quantity,extPrice&pageSize=500`
+      fetchAllPagesPar(
+        `/api/v1/Customers/${custNo}/line-items?filter=categoryCode:eq:${catEnc},businessDate:gte:${threeYrsAgo}&compact=true&pageSize=2000`
       ),
     ]);
 
-    // Aggregate all-accounts top sellers
-    const allByItem = {};
+    // Aggregate customer data by base item number
+    const custByItem = {};
     for (const l of allLines) {
-      const key = l.itemNo || '';
-      if (!key) continue;
-      if (!allByItem[key]) allByItem[key] = { itemNo: key, description: l.description || '', totalQty: 0, totalRev: 0, custCount: new Set() };
-      allByItem[key].totalQty += parseFloat(l.quantity || 0);
-      allByItem[key].totalRev += parseFloat(l.extPrice  || 0);
+      const raw = (l.itemNo || '').trim();
+      if (!raw) continue;
+      const key  = baseNo(raw);
+      const qty  = parseFloat(l.quantity || 0);
+      const rev  = parseFloat(l.extPrice  || 0);
+      const date = (l.businessDate || l.BusinessDate || '').slice(0, 10);
+      if (!custByItem[key]) custByItem[key] = { qty_current: 0, qty_prior: 0, qty_prior_full: 0, rev_current: 0, rev_prior: 0, dates: [] };
+      if (date >= currStart && date <= todayStr) {
+        custByItem[key].qty_current += qty;
+        custByItem[key].rev_current += rev;
+      }
+      if (date >= priorStart && date <= priorFull) {
+        custByItem[key].qty_prior_full += qty;
+        custByItem[key].rev_prior      += rev;
+        if (date <= priorEnd) custByItem[key].qty_prior += qty;
+      }
+      if (date) custByItem[key].dates.push(date);
     }
 
-    // This customer's item set
-    const custItemRevenue = {};
-    for (const l of custLines) {
-      const key = l.itemNo || '';
-      if (!key) continue;
-      custItemRevenue[key] = (custItemRevenue[key] || 0) + parseFloat(l.extPrice || 0);
-    }
+    const result = masterItems.map((item, idx) => {
+      const key   = baseNo(item.itemNo);
+      const cust  = custByItem[key] || {};
+      const s     = (item.status || item.statusCode || 'A').toUpperCase();
+      const dates = [...(cust.dates || [])].sort();
+      return {
+        rank:           idx + 1,
+        itemNo:         key,
+        description:    item.description || '',
+        status:         s === 'A' ? 'A' : 'I',
+        current_qty:    Math.round(cust.qty_current    || 0),
+        prior_qty:      Math.round(cust.qty_prior      || 0),
+        prior_full_qty: Math.round(cust.qty_prior_full || 0),
+        current_sales:  +((cust.rev_current || 0).toFixed(2)),
+        prior_sales:    +((cust.rev_prior   || 0).toFixed(2)),
+        last_sold:      dates[dates.length - 1] || null,
+        cadence:        cadenceLbl(calcCadence(dates.map(d => ({ date: d })))),
+      };
+    });
 
-    const top = Object.values(allByItem)
-      .sort((a, b) => b.totalRev - a.totalRev)
-      .slice(0, 50)
-      .map(item => ({
-        itemNo:       item.itemNo,
-        description:  item.description,
-        totalQty:     +item.totalQty.toFixed(0),
-        totalRev:     +item.totalRev.toFixed(2),
-        custRev:      +(custItemRevenue[item.itemNo] || 0).toFixed(2),
-        custBuys:     !!custItemRevenue[item.itemNo],
-      }));
-
-    res.json(top);
+    routeTimer(`GET /proxy/top-items`, t0, { custNo: req.params.custNo, category, items: result.length });
+    res.json(result);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });

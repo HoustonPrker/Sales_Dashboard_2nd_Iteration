@@ -9,7 +9,7 @@
 
 const express      = require('express');
 const router       = express.Router();
-const { doFetch, fetchAllPages, ytdDateRange, aggregateLineItems, SALES_REP } = require('../lib/api');
+const { doFetch, fetchAllPages, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP } = require('../lib/api');
 const categoryCache = require('../lib/category-cache');
 
 // ── In-memory cache keyed by rep (5-minute TTL) ───────────────
@@ -114,48 +114,59 @@ router.get('/accounts', async (req, res) => {
     const cacheKey = rep || '__all__';
 
     if (accountsCache[cacheKey] && Date.now() - accountsCache[cacheKey].ts < CACHE_TTL) {
+      console.log(`⏱  GET /proxy/accounts → cache hit (${cacheKey})`);
       return res.json(accountsCache[cacheKey].data);
     }
 
+    const t0 = Date.now();
     const repFilter = rep ? `filter=salesRep:eq:${encodeURIComponent(rep)}&` : '';
 
-    // 1. Fetch customers for this rep
-    const customers = await fetchAllPages(
-      `/api/v1/Customers?${repFilter}fields=custNo,name,state,salesRep,lastSaleDate,lastSaleAmount&pageSize=200`
-    );
+    // 1. Fetch customers + CY/PY ticket totals in parallel (3 calls total regardless of customer count)
+    const now    = new Date();
+    const yr     = now.getFullYear();
+    const mm     = String(now.getMonth() + 1).padStart(2, '0');
+    const dd     = String(now.getDate()).padStart(2, '0');
+    const today  = `${yr}-${mm}-${dd}`;
+    const ytdStart  = `${yr}-01-01`;
+    const pyStart   = `${yr - 1}-01-01`;
+    const pyEnd     = `${yr - 1}-${mm}-${dd}`;
+    const repTicketFilter = rep ? `SalesRep:eq:${encodeURIComponent(rep)},` : '';
+
+    const t1 = Date.now();
+    const [customers, cyTickets, pyTickets] = await Promise.all([
+      fetchAllPages(
+        `/api/v1/Customers?${repFilter}fields=custNo,name,state,salesRep,lastSaleDate&pageSize=200`
+      ),
+      // All CY YTD tickets for this rep — aggregate by custNo
+      fetchAllPages(
+        `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${ytdStart},BusinessDate:lte:${today}&fields=CustNo,Total&pageSize=500`
+      ),
+      // All PY same-period tickets for this rep — aggregate by custNo
+      fetchAllPages(
+        `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${pyStart},BusinessDate:lte:${pyEnd}&fields=CustNo,Total&pageSize=500`
+      ),
+    ]);
+    console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
 
     if (!customers.length) {
       accountsCache[cacheKey] = { data: [], ts: Date.now() };
       return res.json([]);
     }
 
-    // 2. Fetch sales-by-category for all customers in parallel
-    //    Also populate the shared category cache so Item Performance doesn't re-fetch
-    const salesMap  = {}; // custNo → { ytd, prior }
-    const rawCatRows = []; // all rows across all customers for category-cache
-
-    {
-      const results = await Promise.all(customers.map(async c => {
-        try {
-          const r    = await doFetch('GET', `/api/v1/Customers/${encodeURIComponent(c.custNo)}/sales-by-category`);
-          const body = r.ok ? await r.json() : [];
-          const rows = Array.isArray(body) ? body : (body.data || []);
-          const ytd   = rows.reduce((s, r) => s + (parseFloat(r.currentYtdAmount) || 0), 0);
-          const prior = rows.reduce((s, r) => s + (parseFloat(r.priorYtdAmount)   || 0), 0);
-          return { custNo: c.custNo, ytd, prior, rows };
-        } catch (_) {
-          return { custNo: c.custNo, ytd: 0, prior: 0, rows: [] };
-        }
-      }));
-      for (const s of results) {
-        salesMap[s.custNo] = s;
-        for (const row of s.rows) rawCatRows.push({ custNo: s.custNo, ...row });
-      }
+    // 2. Aggregate ticket totals by custNo
+    const salesMap = {};
+    for (const t of cyTickets) {
+      const c = (t.CustNo || t.custNo || '').trim();
+      if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0 };
+      if (c) salesMap[c].ytd += parseFloat(t.Total || t.total || 0);
+    }
+    for (const t of pyTickets) {
+      const c = (t.CustNo || t.custNo || '').trim();
+      if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0 };
+      if (c) salesMap[c].prior += parseFloat(t.Total || t.total || 0);
     }
 
-    categoryCache.set(cacheKey, rawCatRows);
-
-    // 3. Build account records — use lastSaleDate from CustomerDto for days since order
+    // 3. Build account records
     const accounts = customers.map(c => {
       const s        = salesMap[c.custNo] || { ytd: 0, prior: 0 };
       const ytdSales = s.ytd;
@@ -188,6 +199,7 @@ router.get('/accounts', async (req, res) => {
 
     accounts.sort((a, b) => b.ytdSales - a.ytdSales);
     accountsCache[cacheKey] = { data: accounts, ts: Date.now() };
+    routeTimer('GET /proxy/accounts', t0, { customers: customers.length, cyTickets: cyTickets.length, pyTickets: pyTickets.length });
     res.json(accounts);
   } catch (e) {
     console.error('/proxy/accounts error:', e.message);
@@ -243,9 +255,14 @@ router.get('/customers/search', async (req, res) => {
 // ── GET /proxy/customer/:custNo ───────────────────────────────
 router.get('/customer/:custNo', async (req, res) => {
   try {
-    const r    = await doFetch('GET', `/api/v1/Customers/${encodeURIComponent(req.params.custNo)}`);
+    const r    = await doFetch('GET', `/api/v1/Customers/${encodeURIComponent(req.params.custNo)}?includeCustomFields=true&compact=true`);
     const body = await r.json();
-    res.status(r.status).json(body.data || body);
+    const d    = body.data || body;
+    // Surface discount custom field at a predictable key
+    if (d && d.USER_BEST_PRICE_COD_CUST !== undefined) {
+      d.best_price_code = d.USER_BEST_PRICE_COD_CUST || null;
+    }
+    res.status(r.status).json(d);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -261,14 +278,15 @@ router.get('/orders/:custNo', async (req, res) => {
       d.setFullYear(d.getFullYear() - 2);
       return d.toISOString().slice(0, 10);
     })();
+    const today = new Date().toISOString().slice(0, 10);
     const raw = await fetchAllPages(
-      `/api/v1/Customers/${custNo}/sales-history?pageSize=200`
+      `/api/v1/pos/ticket-history?filter=custNo:eq:${custNo},businessDate:gte:${since},businessDate:lte:${today}&fields=TicketNo,Total,SaleLines,BusinessDate&pageSize=200`
     );
     const orders = raw.map(o => ({
-      date:      o.businessDate || o.postDate || o.date || '',
-      ticketNo:  o.ticketNo    || o.invoiceNo || o.tktNo || '',
-      amount:    parseFloat(o.total || o.amount || o.netAmt || 0),
-      itemCount: o.lineCount   || o.itemCount  || null,
+      date:      o.BusinessDate || o.businessDate || '',
+      ticketNo:  o.TicketNo    || o.ticketNo     || '',
+      amount:    parseFloat(o.Total || o.total   || 0),
+      itemCount: o.SaleLines   || o.saleLines    || null,
     }));
     res.json(orders);
   } catch (e) {
@@ -314,7 +332,7 @@ router.get('/mtd/:custNo', async (req, res) => {
       `/api/v1/pos/ticket-history?filter=custNo:eq:${custNo},businessDate:gte:${mtdStart},businessDate:lte:${mtdEnd}&fields=custNo,total,businessDate&pageSize=200`
     );
 
-    const mtdTotal  = tickets.reduce((s, t) => s + (parseFloat(t.total) || 0), 0);
+    const mtdTotal  = tickets.reduce((s, t) => s + (parseFloat(t.Total || t.total) || 0), 0);
     const orderDays = new Set(tickets.map(t => (t.businessDate || '').slice(0, 10))).size;
 
     res.json({ total: +mtdTotal.toFixed(2), orderDays, orders: tickets.length });

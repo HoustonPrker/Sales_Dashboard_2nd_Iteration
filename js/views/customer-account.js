@@ -5,8 +5,9 @@
 
 let caCustNo      = null;
 let caCharts      = {};
-let caCatSort     = { col: 'currentYtdAmt', dir: 'desc' };
+let caCatSort     = { col: 'description', dir: 'asc' };
 let caDrill       = null; // null = overview | { category, tab: 'ytd'|'best' }
+let caDrillSort   = { col: 'rank', dir: 'asc' };
 let caAiCtrl      = null; // AbortController for in-flight AI stream
 let caConversation = [];  // [{role,content}] full chat history
 
@@ -24,7 +25,7 @@ async function loadCustomerAccount(custNo) {
   resetCAState();
   caCustNo       = custNo;
   caDrill        = null;
-  caCatSort      = { col: 'currentYtdAmt', dir: 'desc' };
+  caCatSort      = { col: 'description', dir: 'asc' };
   caConversation = [];
   Object.keys(caOrderLinesCache).forEach(k => delete caOrderLinesCache[k]);
 
@@ -114,7 +115,6 @@ function renderCAEmpty() {
       ${emptyKpi('Month to Date',   'This month')}
       ${emptyKpi('Days Since Order','Last order date')}
       ${emptyKpi('Target (Annual)', 'Prior YTD baseline')}
-      ${emptyKpi('CSAT Score',      'Satisfaction score')}
     </div>
 
     <div class="rank-strip" style="margin-bottom:12px">
@@ -130,7 +130,7 @@ function renderCAEmpty() {
 
     <div class="charts-row" id="ca-charts-row">
       <div class="chart-panel">
-        <div class="chart-title">Category Sales — Current vs Prior YTD</div>
+        <div class="chart-title">Category % Change vs Prior YTD</div>
         <div class="chart-container" style="height:300px;display:flex;align-items:center;justify-content:center;color:#d1d5db;font-size:14px">
           No data loaded
         </div>
@@ -172,6 +172,12 @@ function renderCA(cust, catData, mtd, orders) {
   const salesRep  = cust.salesRep || '—';
   const segment   = cust.categoryCode || '—';
   const phone     = cust.phone1 || cust.phone2 || cust.busPhone || cust.phoneNo || cust.phone || '';
+  const rawDiscount = cust.best_price_code || cust.USER_BEST_PRICE_COD_CUST || null;
+  const discountStr = (() => {
+    if (!rawDiscount) return 'No Discount';
+    const m = rawDiscount.match(/(\d+(?:\.\d+)?)%?$/);
+    return m ? `${parseFloat(m[1])}% Discount` : rawDiscount;
+  })();
   const lastDate  = cust.lastSaleDate ? cust.lastSaleDate.slice(0, 10) : null;
   const daysSince = lastDate ? Math.floor((Date.now() - new Date(lastDate)) / 86400000) : null;
 
@@ -181,6 +187,97 @@ function renderCA(cust, catData, mtd, orders) {
   const pctToTgt   = target > 0 ? ytdTotal / target : 0;
   const pctChange  = priorTotal > 0 ? (ytdTotal - priorTotal) / priorTotal : null;
   const mtdTotal   = mtd?.total || 0;
+
+  // ── Derived KPIs ──────────────────────────────────────────────
+  const now2 = new Date();
+  const yr   = now2.getFullYear();
+  const mm   = String(now2.getMonth() + 1).padStart(2, '0');
+  const dd   = String(now2.getDate()).padStart(2, '0');
+
+  // Run rate: % of calendar year elapsed
+  const jan1    = new Date(yr, 0, 1);
+  const runRate = (now2 - jan1) / (365 * 86400000);
+  const runRatePct = (runRate * 100).toFixed(1);
+  const runRateColor = pctToTgt >= runRate ? '#059669' : pctToTgt >= runRate - 0.10 ? '#d97706' : '#dc2626';
+
+  // Monthly business-day run rate (Mon–Fri, excl. US federal holidays)
+  const _isHoliday = d => {
+    const y = d.getFullYear(), mo = d.getMonth()+1, dy = d.getDate(), dow = d.getDay();
+    const nth = (yr,m,n,wd) => { const f=new Date(yr,m-1,1).getDay(); let o=wd-f; if(o<0)o+=7; return 1+o+(n-1)*7; };
+    const last = (yr,m,wd) => { const l=new Date(yr,m,0); let dif=l.getDay()-wd; if(dif<0)dif+=7; return l.getDate()-dif; };
+    const fixed = (fm,fd) => { const raw=new Date(y,fm-1,fd).getDay(); let od=fd; if(raw===0)od=fd+1; if(raw===6)od=fd-1; return mo===fm&&dy===od; };
+    if (fixed(1,1)||fixed(6,19)||fixed(7,4)||fixed(11,11)||fixed(12,25)) return true;
+    if (mo===1 &&dow===1&&dy===nth(y,1,3,1)) return true;
+    if (mo===2 &&dow===1&&dy===nth(y,2,3,1)) return true;
+    if (mo===5 &&dow===1&&dy===last(y,5,1))  return true;
+    if (mo===9 &&dow===1&&dy===nth(y,9,1,1)) return true;
+    if (mo===10&&dow===1&&dy===nth(y,10,2,1))return true;
+    if (mo===11&&dow===4&&dy===nth(y,11,4,4))return true;
+    return false;
+  };
+  const _countBD = (start, end) => {
+    let n=0; const c=new Date(start); c.setHours(0,0,0,0); const f=new Date(end); f.setHours(0,0,0,0);
+    while(c<=f){const dw=c.getDay();if(dw!==0&&dw!==6&&!_isHoliday(c))n++;c.setDate(c.getDate()+1);}
+    return n;
+  };
+  const _moStart  = new Date(yr, now2.getMonth(), 1);
+  const _moEnd    = new Date(yr, now2.getMonth()+1, 0);
+  const _moElapsed = _countBD(_moStart, now2);
+  const _moTotal   = _countBD(_moStart, _moEnd);
+  const monthRunRatePct = _moTotal > 0 ? (_moElapsed / _moTotal * 100).toFixed(1) : '0.0';
+
+  // Prior-prior year (same Jan 1 – today window, 2 years ago) — derived from order history
+  const ppyStart = `${yr - 2}-01-01`;
+  const ppyEnd   = `${yr - 2}-${mm}-${dd}`;
+  const ppyTotal = orders.filter(o => o.date >= ppyStart && o.date <= ppyEnd)
+                         .reduce((s, o) => s + (o.amount || 0), 0);
+
+  // Monthly goal: prior year same month orders
+  const pyMonthStart = `${yr - 1}-${mm}-01`;
+  const pyMonthEnd   = `${yr - 1}-${mm}-${dd}`;
+  const monthGoal = orders.filter(o => o.date >= pyMonthStart && o.date <= pyMonthEnd)
+                          .reduce((s, o) => s + (o.amount || 0), 0);
+  const mtdPctOfGoal = monthGoal > 0 ? (mtdTotal / monthGoal * 100).toFixed(1) : null;
+
+  // Orders in last 12 months + avg cadence
+  const oneYearAgo  = new Date(now2); oneYearAgo.setFullYear(yr - 1);
+  const orders12mo  = orders.filter(o => o.date && new Date(o.date) >= oneYearAgo).length;
+  const orderDates  = [...new Set(orders.map(o => o.date).filter(Boolean))].sort();
+  let avgCadence = null;
+  if (orderDates.length >= 2) {
+    const span = (new Date(orderDates[orderDates.length - 1]) - new Date(orderDates[0])) / 86400000;
+    avgCadence = span / (orderDates.length - 1);
+  }
+  const cadenceLabel = avgCadence === null ? null
+    : avgCadence <= 7  ? 'Weekly'
+    : avgCadence <= 16 ? 'Bi-weekly'
+    : avgCadence <= 35 ? 'Monthly'
+    : avgCadence <= 50 ? 'Every 6 weeks'
+    : avgCadence <= 75 ? 'Every 2 months'
+    : 'Quarterly';
+
+  // Annual Retail Sales — customer-level YTD field from the API
+  const annualRetailSales = parseFloat(
+    cust.ytdSales || cust.ytdAmount || cust.annualSales || cust.retailSales ||
+    cust.currentYtdSales || cust.salesYtd || 0
+  ) || null;
+
+  // Lifetime / 2-year sales — sum all orders from the 2-year history window
+  const lifetimeSales = orders.length > 0
+    ? orders.reduce((s, o) => s + (o.amount || 0), 0)
+    : (cust.totalSales || cust.lifetimeSales || cust.totSales || cust.lifeSales || null);
+  const customerSince = cust.createDate || cust.openDate || cust.firstSaleDate || null;
+  const custAge = customerSince ? Math.floor((now2 - new Date(customerSince)) / (365.25 * 86400000)) : null;
+  const customerAgeStr = (() => {
+    if (!customerSince) return null;
+    const s = new Date(customerSince);
+    let yrs = now2.getFullYear() - s.getFullYear();
+    let mos = now2.getMonth() - s.getMonth();
+    if (mos < 0) { yrs--; mos += 12; }
+    const yPart = yrs > 0 ? `${yrs} yr${yrs !== 1 ? 's' : ''}` : '';
+    const mPart = mos > 0 ? `${mos} mo` : '';
+    return [yPart, mPart].filter(Boolean).join(', ') || '< 1 mo';
+  })();
 
   // Determine account tier from accounts data if loaded
   let tier = 'Unknown';
@@ -214,6 +311,10 @@ function renderCA(cust, catData, mtd, orders) {
   const chgCls   = pctChange === null ? '' : pctChange >= 0 ? 'vel-up' : 'vel-down';
   const chgStr   = pctChange !== null ? (pctChange >= 0 ? '+' : '') + (pctChange * 100).toFixed(1) + '%' : '—';
 
+  const runRateFill = Math.min(runRate * 100, 100).toFixed(1);
+  const mtdPctColor = mtdPctOfGoal === null ? '#fff' : parseFloat(mtdPctOfGoal) >= 100 ? '#86efac' : parseFloat(mtdPctOfGoal) >= 70 ? '#fcd34d' : '#fca5a5';
+  const daysSinceColor = daysSince === null ? '#fff' : daysSince <= 14 ? '#86efac' : daysSince <= 30 ? '#fcd34d' : '#fca5a5';
+
   panel.innerHTML = `
     <!-- Back link -->
     <div class="cat-nav-breadcrumb" style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
@@ -229,102 +330,135 @@ function renderCA(cust, catData, mtd, orders) {
       </button>
     </div>
 
-    <!-- Customer header -->
-    <div class="item-header-card" style="flex-direction:column;align-items:flex-start;gap:10px;padding:18px 24px">
-      <div style="display:flex;align-items:center;gap:16px;width:100%;flex-wrap:wrap">
-        <div class="hdr-name" style="font-size:26px">${name}</div>
-        <span class="tier-badge ${tierCls}" style="font-size:13px;padding:4px 14px">${tier.replace('AtRisk','At Risk')}</span>
-        ${daysSince !== null ? (() => {
-          const bg = daysSince <= 14 ? 'rgba(22,163,74,0.35)' : daysSince <= 30 ? 'rgba(217,119,6,0.35)' : 'rgba(220,38,38,0.35)';
-          const border = daysSince <= 14 ? 'rgba(134,239,172,0.5)' : daysSince <= 30 ? 'rgba(252,211,77,0.5)' : 'rgba(252,165,165,0.5)';
-          return `<span style="font-size:13px;font-weight:600;background:${bg};border:1px solid ${border};border-radius:6px;padding:4px 12px;white-space:nowrap;color:#fff">${daysSince}d since last order</span>`;
-        })() : ''}
-      </div>
-      <div class="hdr-meta-row" style="justify-content:flex-start">
-        <span class="hdr-pill"><span class="hdr-lbl">Acct #</span><span class="hdr-val">${custNo}</span></span>
-        <span class="hdr-pill"><span class="hdr-lbl">Rep</span><span class="hdr-val">${salesRep}</span></span>
-        <span class="hdr-pill"><span class="hdr-lbl">State</span><span class="hdr-val">${state}</span></span>
-        <span class="hdr-pill"><span class="hdr-lbl">Segment</span><span class="hdr-val">${segment}</span></span>
-        ${lastDate ? `<span class="hdr-pill"><span class="hdr-lbl">Last Order</span><span class="hdr-val">${lastDate}</span></span>` : ''}
-        ${phone ? `<span class="hdr-pill"><span class="hdr-lbl">Phone</span><a href="tel:${phone.replace(/[^\d+]/g,'')}" class="hdr-val" style="color:#0d9488;text-decoration:none;font-weight:600" title="Call ${phone}">${phone}</a></span>` : ''}
-      </div>
-    </div>
+    <!-- Combined customer identity + KPI panel -->
+    <div class="mgr-panel" style="margin-bottom:12px">
+      <div style="display:flex;gap:0;align-items:stretch">
 
-    <!-- KPI row -->
-    <div class="kpi-row" style="grid-template-columns:repeat(8,1fr)">
-      <div class="kpi-card kpi-card-sales">
-        <div class="kpi-lbl">YTD Sales</div>
-        <div class="kpi-val" style="font-size:26px">${fmt$(ytdTotal)}</div>
-        <div class="kpi-sub">Current year to date</div>
-      </div>
-      <div class="kpi-card kpi-card-vel">
-        <div class="kpi-lbl">% to Target</div>
-        <div class="kpi-val" style="font-size:26px;color:${barColor}">${target > 0 ? (pctToTgt * 100).toFixed(1) + '%' : '—'}</div>
-        <div class="kpi-sub">vs prior same period</div>
-      </div>
-      <div class="kpi-card kpi-card-sales">
-        <div class="kpi-lbl">Prior YTD</div>
-        <div class="kpi-val" style="font-size:26px">${priorTotal > 0 ? fmt$(priorTotal) : '—'}</div>
-        <div class="kpi-sub">Same period last year</div>
-      </div>
-      <div class="kpi-card kpi-card-sales">
-        <div class="kpi-lbl">YTD Change</div>
-        <div class="kpi-val" style="font-size:26px"><span class="${chgCls}">${chgArrow} ${chgStr}</span></div>
-        <div class="kpi-sub">${fmt$(ytdTotal - priorTotal)} vs prior</div>
-      </div>
-      <div class="kpi-card kpi-card-sales">
-        <div class="kpi-lbl">Month to Date</div>
-        <div class="kpi-val" style="font-size:26px">${fmt$(mtdTotal)}</div>
-        <div class="kpi-sub">${mtd?.orderDays || 0} order days this month</div>
-      </div>
-      <div class="kpi-card kpi-card-status">
-        <div class="kpi-lbl">Days Since Order</div>
-        <div class="kpi-val" style="font-size:26px"><span class="${daysCls}">${daysSince !== null ? daysSince : '—'}</span></div>
-        <div class="kpi-sub">${lastDate || 'No orders found'}</div>
-      </div>
-      <div class="kpi-card kpi-card-status">
-        <div class="kpi-lbl">Target (Annual)</div>
-        <div class="kpi-val" style="font-size:26px">${target > 0 ? fmt$(target) : '—'}</div>
-        <div class="kpi-sub">Prior YTD baseline</div>
-      </div>
-      ${buildCSATCard({ custNo, daysSinceOrder: daysSince, pctChange, pctToTarget: pctToTgt })}
-    </div>
-
-    <!-- Progress bar -->
-    <div class="rank-strip" style="margin-bottom:12px">
-      <div class="rank-text">
-        <div class="rank-main">YTD Performance vs Target
-          <span class="rank-pct" style="color:${barColor === '#059669' ? '#86efac' : barColor === '#d97706' ? '#fcd34d' : '#fca5a5'}">
-            ${target > 0 ? (pctToTgt * 100).toFixed(1) + '%' : '—'}
-          </span>
+        <!-- Left: customer identity -->
+        <div style="display:flex;flex-direction:column;justify-content:center;min-width:190px;max-width:210px;padding:16px 20px 16px 4px;border-right:1px solid rgba(255,255,255,0.12);margin-right:20px;flex-shrink:0">
+          <div style="font-size:20px;font-weight:800;color:#fff;line-height:1.2;margin-bottom:6px">${name}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.65);line-height:1.8">
+            <div>${salesRep} · ${state}${segment && segment !== '—' ? ' · ' + segment : ''}</div>
+            <div>${discountStr}</div>
+          </div>
+          ${phone ? `<a href="tel:${phone.replace(/[^\d+]/g,'')}" style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.8);text-decoration:none;font-weight:600" title="Call ${phone}">${phone}</a>` : ''}
         </div>
-        <div class="rank-method">${fmt$(ytdTotal)} of ${fmt$(target)} target · ${chgStr} vs prior year</div>
-      </div>
-      <div class="rank-bar-wrap" style="width:320px">
-        <div class="rank-bar-fill" id="ca-progress-bar" style="width:0%;background:${barColor}"></div>
-        <div class="rank-bar-lbl">${barLabel}</div>
+
+        <!-- Right: 2-row KPI grid -->
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px;padding:12px 0">
+
+          <!-- Row 1: Annual Retail Sales | Annual Target | % to Target | Prior Year | Month to Date -->
+          <div class="mgr-pill-row ca-kpi-row" style="margin:0">
+            <div class="mgr-pill">
+              <div class="mgr-pill-label">Annual Retail Sales</div>
+              <div class="mgr-pill-value">${annualRetailSales ? fmt$(annualRetailSales) : fmt$(0)}</div>
+              <div class="mgr-pill-sub">Current year retail</div>
+            </div>
+            <div class="mgr-pill">
+              <div class="mgr-pill-label">Annual Target</div>
+              <div class="mgr-pill-value">${target > 0 ? fmt$(target) : '—'}</div>
+              <div class="mgr-pill-sub">Prior full year baseline</div>
+            </div>
+            <div class="mgr-pill">
+              <div class="mgr-pill-label">% to Target</div>
+              <div class="mgr-pill-value" style="color:${runRateColor}">${target > 0 ? (pctToTgt * 100).toFixed(1) + '%' : '—'}</div>
+              <div class="mgr-pill-sub">${chgStr} vs prior year</div>
+            </div>
+            <div class="mgr-pill">
+              <div class="mgr-pill-label">Prior Year</div>
+              <div class="mgr-pill-value">${priorTotal > 0 ? fmt$(priorTotal) : '—'}</div>
+              <div class="mgr-pill-sub">Same period last year</div>
+            </div>
+            <div class="mgr-pill">
+              <div class="mgr-pill-label">Month to Date</div>
+              <div class="mgr-pill-value">
+                <span class="kpi-info-wrap">
+                  ${fmt$(mtdTotal)}
+                  <span class="kpi-info-icon">i
+                    <span class="kpi-tooltip-box">
+                      <strong>Monthly Goal:</strong> ${monthGoal > 0 ? fmt$(monthGoal) : '—'}<br>
+                      <strong>% to Goal:</strong> ${mtdPctOfGoal !== null ? mtdPctOfGoal + '%' : '—'}<br>
+                      <strong>Run Rate:</strong> ${monthRunRatePct}%
+                    </span>
+                  </span>
+                </span>
+              </div>
+              <div class="mgr-pill-sub">${monthGoal > 0 ? 'Goal: ' + fmt$(monthGoal) : (mtd?.orderDays || 0) + ' order days'}</div>
+            </div>
+          </div>
+
+          <!-- Row 2: Lifetime Sales | YTD Sales | Run Rate | Prior Prior Year | Last Order Date -->
+          <div class="mgr-pill-row ca-kpi-row" style="margin:0">
+            <div class="mgr-pill">
+              <div class="mgr-pill-label">Lifetime Sales</div>
+              <div class="mgr-pill-value">
+                <span class="kpi-info-wrap">
+                  ${lifetimeSales ? fmt$(lifetimeSales) : '—'}
+                  ${customerSince ? `<span class="kpi-info-icon">i
+                    <span class="kpi-tooltip-box">
+                      <strong>Origin Date:</strong> ${customerSince.slice(0,10)}<br>
+                      <strong>Customer For:</strong> ${customerAgeStr}
+                    </span>
+                  </span>` : ''}
+                </span>
+              </div>
+              <div class="mgr-pill-sub">${customerAgeStr ? customerAgeStr + ' customer' : 'Last 2 years'}</div>
+            </div>
+            <div class="mgr-pill">
+              <div class="mgr-pill-label">YTD Sales</div>
+              <div class="mgr-pill-value">${fmt$(ytdTotal)}</div>
+              <div class="mgr-pill-sub">From category breakdown</div>
+            </div>
+            <div class="mgr-pill mgr-pill-runrate">
+              <div class="mgr-pill-label">Run Rate</div>
+              <div class="mgr-pill-value">${runRatePct}%</div>
+              <div class="mgr-runrate-bar-track" style="margin:4px 0 2px">
+                <div class="mgr-runrate-bar-fill" style="width:${runRateFill}%"></div>
+              </div>
+              <div class="mgr-pill-sub">of year elapsed</div>
+            </div>
+            <div class="mgr-pill">
+              <div class="mgr-pill-label">Prior Prior Year</div>
+              <div class="mgr-pill-value">${ppyTotal > 0 ? fmt$(ppyTotal) : '—'}</div>
+              <div class="mgr-pill-sub">2 years ago same period</div>
+            </div>
+            <div class="mgr-pill">
+              <div class="mgr-pill-label">Last Order Date</div>
+              <div class="mgr-pill-value" style="font-size:18px">
+                <span class="kpi-info-wrap">
+                  ${lastDate || '—'}
+                  <span class="kpi-info-icon">i
+                    <span class="kpi-tooltip-box">
+                      <strong>Orders (last 12 mo):</strong> ${orders12mo}<br>
+                      <strong>Avg. Frequency:</strong> ${avgCadence !== null ? '(~every ' + Math.round(avgCadence) + ' days)' : '—'}<br>
+                      <strong>Cadence:</strong> ${cadenceLabel || '—'}
+                    </span>
+                  </span>
+                </span>
+              </div>
+              <div class="mgr-pill-sub">${daysSince !== null ? daysSince + ' days ago' : 'No orders found'}</div>
+            </div>
+          </div>
+
+        </div>
       </div>
     </div>
 
-    <!-- Charts -->
-    <div class="charts-row" id="ca-charts-row">
-      <div class="chart-panel">
-        <div class="chart-title">Category Sales — Current vs Prior YTD</div>
-        <div class="chart-container" style="height:300px"><canvas id="ca-bar-chart"></canvas></div>
+    <!-- Category: table left, charts/drill-down right -->
+    <div style="display:grid;grid-template-columns:minmax(min-content,1fr) minmax(0,1fr);gap:16px;align-items:stretch;margin-bottom:12px">
+      <div id="ca-cat-section">
+        ${buildCatTable(catData)}
       </div>
-      <div class="chart-panel">
-        <div class="chart-title">Category Mix</div>
-        <div class="chart-container" style="height:260px"><canvas id="ca-donut-chart"></canvas></div>
+      <div id="ca-cat-charts" style="display:flex;flex-direction:column;align-self:stretch;min-height:0;overflow:hidden">
+        <div class="chart-panel" style="margin-bottom:12px;flex-shrink:0">
+          <div class="chart-title">Category Mix</div>
+          <div class="chart-container" style="height:300px"><canvas id="ca-donut-chart"></canvas></div>
+        </div>
+        <div class="chart-panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+          <div class="chart-title">Category % Change vs Prior YTD</div>
+          <div class="chart-container" style="flex:1;height:0;min-height:150px;position:relative"><canvas id="ca-bar-chart"></canvas></div>
+        </div>
       </div>
-      <div class="chart-panel">
-        <div class="chart-title">Monthly Sales — ${new Date().getFullYear()}</div>
-        <div class="chart-container" style="height:260px"><canvas id="ca-monthly-chart"></canvas></div>
-      </div>
-    </div>
-
-    <!-- Category table -->
-    <div id="ca-cat-section">
-      ${buildCatTable(catData)}
     </div>
 
     <!-- Order History (full width) -->
@@ -391,6 +525,54 @@ function renderCA(cust, catData, mtd, orders) {
       </div>
     </div>
 
+    <!-- Activity Log -->
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Activity Log</span>
+        <button onclick="activityLogOpen('${custNo.replace(/'/g,"\\'")}')"
+          style="background:#3d5a80;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
+          + Log Activity
+        </button>
+      </div>
+      <div id="ca-activity-list">${buildActivityList(custNo)}</div>
+    </div>
+
+    <!-- Activity Log Modal -->
+    <div id="activity-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:3100;align-items:center;justify-content:center" onclick="if(event.target===this)activityLogClose()">
+      <div style="background:#fff;border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,0.3);width:440px;max-width:96vw;overflow:hidden">
+        <div style="background:#3d5a80;color:#fff;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+          <span style="font-size:15px;font-weight:700">Log Activity</span>
+          <button onclick="activityLogClose()" style="background:none;border:none;color:rgba(255,255,255,0.8);font-size:20px;cursor:pointer;line-height:1;padding:2px 6px;border-radius:4px">✕</button>
+        </div>
+        <div style="padding:18px 20px;display:flex;flex-direction:column;gap:12px">
+          <input type="hidden" id="activity-cust-no" value="">
+          <div>
+            <label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:4px">Type of Contact</label>
+            <select id="activity-type" onchange="activityToggleDuration()" style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit;color:#374151;outline:none">
+              <option value="Call">Call</option>
+              <option value="Email">Email</option>
+              <option value="Visit">Visit</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div id="activity-duration-row">
+            <label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:4px">Duration (minutes)</label>
+            <input type="number" id="activity-duration" min="0" placeholder="e.g. 15"
+              style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit;color:#374151;outline:none">
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:4px">Notes</label>
+            <textarea id="activity-notes" placeholder="What was discussed?" rows="3"
+              style="width:100%;border:1px solid #d1d5db;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit;resize:vertical;color:#374151;outline:none"></textarea>
+          </div>
+        </div>
+        <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:10px">
+          <button onclick="activityLogClose()" style="background:#f1f5f9;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Cancel</button>
+          <button onclick="activityLogSave()" style="background:#3d5a80;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Save</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Notes -->
     <div class="card" style="margin-bottom:20px">
       <div class="card-title">Account Notes</div>
@@ -415,6 +597,7 @@ function renderCA(cust, catData, mtd, orders) {
   window.caLastCust    = cust;
   window.caLastCatData = catData;
   window.caLastMtd     = mtd;
+  window.caLastOrders  = orders;
 }
 
 // ── Charts ────────────────────────────────────────────────────
@@ -424,30 +607,60 @@ function renderCACharts(catData, orders) {
 
   const top8 = [...catData].sort((a, b) => b.currentYtdAmt - a.currentYtdAmt).slice(0, 8);
 
-  // ── Horizontal bar: current vs prior YTD by category ─────────
+  // ── Diverging bar: $ change vs prior YTD ─────────────────────
+  const chgRows = catData
+    .map(c => ({ label: c.description || c.categoryCode, chg: +(c.currentYtdAmt - c.priorYtdAmt).toFixed(2) }))
+    .filter(c => c.chg !== 0)
+    .sort((a, b) => a.chg - b.chg); // most negative at top, most positive at bottom
+
   const barCtx = document.getElementById('ca-bar-chart');
-  if (barCtx && top8.length) {
+  if (barCtx && chgRows.length) {
+    const absMax = Math.max(...chgRows.map(c => Math.abs(c.chg)));
+    const axisMax = absMax * 1.35; // extra room for data labels
     caCharts.bar = new Chart(barCtx.getContext('2d'), {
       type: 'bar',
       data: {
-        labels: top8.map(c => {
-          const s = c.description || c.categoryCode;
-          return s.length > 18 ? s.slice(0, 18) + '…' : s;
-        }),
-        datasets: [
-          { label: 'Current YTD', data: top8.map(c => c.currentYtdAmt), backgroundColor: '#0d9488', borderRadius: 3, borderWidth: 0 },
-          { label: 'Prior YTD',   data: top8.map(c => c.priorYtdAmt),   backgroundColor: '#f97316', borderRadius: 3, borderWidth: 0 },
-        ]
+        labels: chgRows.map(c => c.label.length > 18 ? c.label.slice(0, 18) + '…' : c.label),
+        datasets: [{
+          data:            chgRows.map(c => c.chg),
+          backgroundColor: chgRows.map(c => c.chg >= 0 ? 'rgba(22,163,74,0.75)' : 'rgba(220,38,38,0.75)'),
+          borderColor:     chgRows.map(c => c.chg >= 0 ? '#16a34a' : '#dc2626'),
+          borderWidth: 1,
+          borderRadius: 3,
+        }]
       },
       options: {
         indexAxis: 'y',
         responsive: true, maintainAspectRatio: false,
         plugins: {
-          legend: { display: true, position: 'top', labels: { font: { size: 11 }, boxWidth: 12, padding: 8 } },
-          tooltip: { ...tooltip, callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmt$(ctx.parsed.x)}` } }
+          legend: { display: false },
+          tooltip: { ...tooltip, callbacks: { label: ctx => ` ${ctx.parsed.x >= 0 ? '+' : ''}${fmt$(ctx.parsed.x)} vs prior YTD` } },
+          chgLabels: {
+            id: 'chgLabels',
+            afterDatasetsDraw(chart) {
+              const { ctx, data, scales: { x, y } } = chart;
+              ctx.save();
+              data.datasets[0].data.forEach((val, i) => {
+                const meta = chart.getDatasetMeta(0).data[i];
+                const isPos = val >= 0;
+                const label = (isPos ? '+' : '') + fmt$(val);
+                ctx.font = '600 10px system-ui,sans-serif';
+                ctx.fillStyle = isPos ? '#16a34a' : '#dc2626';
+                ctx.textBaseline = 'middle';
+                ctx.textAlign = isPos ? 'left' : 'right';
+                const xPx = x.getPixelForValue(val);
+                ctx.fillText(label, isPos ? xPx + 4 : xPx - 4, meta.y);
+              });
+              ctx.restore();
+            }
+          }
         },
         scales: {
-          x: { ticks: { font: { size: 11 }, color: '#6b7280', callback: v => fmtRevMM(v) }, grid: { color: 'rgba(0,0,0,0.04)' } },
+          x: {
+            min: -axisMax, max: axisMax,
+            ticks: { font: { size: 11 }, color: '#6b7280', callback: v => fmtRevMM(v) },
+            grid:  { color: ctx => ctx.tick.value === 0 ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.04)', lineWidth: ctx => ctx.tick.value === 0 ? 1.5 : 1 }
+          },
           y: { ticks: { font: { size: 11 }, color: '#374151' }, grid: { display: false } }
         }
       }
@@ -474,7 +687,7 @@ function renderCACharts(catData, orders) {
       options: {
         responsive: true, maintainAspectRatio: false, cutout: '55%',
         plugins: {
-          legend: { display: true, position: 'right', labels: { font: { size: 10 }, boxWidth: 10, padding: 6 } },
+          legend: { display: true, position: 'right', labels: { font: { size: 13, weight: '500' }, color: '#111827', boxWidth: 14, boxHeight: 14, padding: 12 } },
           tooltip: {
             ...tooltip,
             callbacks: {
@@ -489,29 +702,6 @@ function renderCACharts(catData, orders) {
     });
   }
 
-  // ── Monthly bar ───────────────────────────────────────────────
-  const monthCtx = document.getElementById('ca-monthly-chart');
-  if (monthCtx) {
-    const { labels, data } = buildMonthlyData(orders);
-    caCharts.monthly = new Chart(monthCtx.getContext('2d'), {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{ label: 'Sales', data, backgroundColor: '#3d5a80', borderRadius: 3 }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { ...tooltip, callbacks: { label: ctx => ` ${fmt$(ctx.parsed.y)}` } }
-        },
-        scales: {
-          x: { ticks: { font: { size: 11 }, color: '#374151' }, grid: { display: false } },
-          y: { ticks: { font: { size: 11 }, color: '#6b7280', callback: v => fmtRevMM(v) }, grid: { color: 'rgba(0,0,0,0.04)' }, beginAtZero: true }
-        }
-      }
-    });
-  }
 }
 
 function buildMonthlyData(orders) {
@@ -530,12 +720,55 @@ function buildMonthlyData(orders) {
   return { labels: allLabels.slice(0, max), data: months.slice(0, max) };
 }
 
+// ── Always-show category list ─────────────────────────────────
+// These categories always appear in the table even with $0 sales.
+const CA_ALWAYS_SHOW = [
+  'BABY','BALLOON WTS','BALLOONS','CANDY','ELECTRONIC','FASHION',
+  'FIXTURES','GIFTS','HEALTH & BEAUTY','HOMEOFFICE','INSPIRATIONAL',
+  'BOUQUET','CHANGEMAKER','KELLILOON','PLUSH','SEASONAL','TOYS',
+];
+
 // ── Category table ────────────────────────────────────────────
 
 function buildCatTable(catData) {
-  if (!catData.length) return '<div style="padding:20px;color:#9ca3af">No category data available.</div>';
+  // Merge always-show list with actual data
+  const lookup = {};
+  for (const c of catData) {
+    const dk = (c.description  || '').toUpperCase().trim();
+    const ck = (c.categoryCode || '').toUpperCase().trim();
+    if (dk) lookup[dk] = c;
+    if (ck && !lookup[ck]) lookup[ck] = c;
+  }
+  const seen = new Set();
+  const merged = [];
+  for (const name of CA_ALWAYS_SHOW) {
+    const key = name.toUpperCase();
+    const found = lookup[key];
+    if (found) {
+      const fk = (found.categoryCode || '').toUpperCase().trim();
+      const fd = (found.description  || '').toUpperCase().trim();
+      if (seen.has(fk) || seen.has(fd)) continue;
+      merged.push(found);
+      if (fk) seen.add(fk);
+      if (fd) seen.add(fd);
+    } else {
+      if (seen.has(key)) continue;
+      merged.push({ categoryCode: name, description: name, currentYtdAmt: 0, currentQty: 0, priorYtdAmt: 0, priorQty: 0, dollarChange: 0 });
+      seen.add(key);
+    }
+  }
+  // Append any categories from actual data not already in the list
+  for (const c of catData) {
+    const ck = (c.categoryCode || '').toUpperCase().trim();
+    const dk = (c.description  || '').toUpperCase().trim();
+    if (!seen.has(ck) && !seen.has(dk)) {
+      merged.push(c);
+      if (ck) seen.add(ck);
+      if (dk) seen.add(dk);
+    }
+  }
 
-  const sorted = [...catData].sort((a, b) => {
+  const sorted = [...merged].sort((a, b) => {
     const dir = caCatSort.dir === 'asc' ? 1 : -1;
     switch (caCatSort.col) {
       case 'description':   return dir * (a.description || '').localeCompare(b.description || '');
@@ -552,41 +785,75 @@ function buildCatTable(catData) {
     }
   });
 
-  const th = (key, label, cls = '') => {
+  const th = (key, label, cls = '', style = '') => {
     const active = caCatSort.col === key;
     const icon   = active ? (caCatSort.dir === 'asc' ? '▲' : '▼') : '⇅';
-    return `<th class="${cls} sort-th${active ? ' sort-active' : ''}" onclick="caSortCat('${key}')">${label}<span class="sort-icon">${icon}</span></th>`;
+    return `<th class="${cls} sort-th${active ? ' sort-active' : ''}" onclick="caSortCat('${key}')"${style ? ` style="${style}"` : ''}>${label}<span class="sort-icon">${icon}</span></th>`;
   };
+
+  // Totals row
+  const totCurrAmt  = sorted.reduce((s, c) => s + (c.currentYtdAmt || 0), 0);
+  const totCurrQty  = sorted.reduce((s, c) => s + (c.currentQty    || 0), 0);
+  const totPriorAmt = sorted.reduce((s, c) => s + (c.priorYtdAmt   || 0), 0);
+  const totPriorQty = sorted.reduce((s, c) => s + (c.priorQty      || 0), 0);
+  const totDollar   = totCurrAmt - totPriorAmt;
+  const totPctChg   = totPriorAmt > 0 ? ((totCurrAmt - totPriorAmt) / totPriorAmt * 100) : null;
+  const totDollarBg = totDollar >= 0 ? 'rgba(22,163,74,0.12)' : 'rgba(220,38,38,0.12)';
+  const totDollarCl = totDollar >= 0 ? '#059669' : '#dc2626';
+  const totPctCl    = totPctChg === null ? '#374151' : totPctChg >= 0 ? '#059669' : '#dc2626';
+  const totPctStr   = totPctChg !== null ? (totPctChg >= 0 ? '+' : '') + totPctChg.toFixed(1) + '%' : '—';
 
   const rows = sorted.map(c => {
     const pctChange = c.priorYtdAmt > 0 ? ((c.currentYtdAmt - c.priorYtdAmt) / c.priorYtdAmt * 100) : null;
     const pctCls    = pctChange === null ? '' : pctChange >= 0 ? 'vel-up' : 'vel-down';
     const pctArrow  = pctChange === null ? '' : pctChange >= 0 ? '↑' : '↓';
     const pctStr    = pctChange !== null ? (pctChange >= 0 ? '+' : '') + pctChange.toFixed(1) + '%' : '—';
-    const dollarCls = c.dollarChange >= 0 ? 'vel-up' : 'vel-down';
+    const dBg       = c.dollarChange >= 0 ? 'rgba(22,163,74,0.10)' : 'rgba(220,38,38,0.10)';
+    const dCl       = c.dollarChange >= 0 ? '#059669' : '#dc2626';
     const catLabel  = c.description || c.categoryCode;
     return `<tr>
-      <td class="cat-name-cell">
-        <a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}')">${catLabel}</a>
+      <td class="cat-name-cell" style="width:140px;max-width:140px">
+        <a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}','best')" title="View best selling items">${catLabel}</a>
       </td>
       <td class="num-ctr">${fmt$(c.currentYtdAmt)}</td>
-      <td class="num-ctr">${c.currentQty > 0 ? Math.round(c.currentQty).toLocaleString() : '—'}</td>
+      <td class="num-ctr">${c.currentQty > 0 ? `<a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}','ytd')" title="View YTD item list" style="font-weight:700">${Math.round(c.currentQty).toLocaleString()}</a>` : '—'}</td>
       <td class="num-ctr">${c.priorYtdAmt > 0 ? fmt$(c.priorYtdAmt) : '—'}</td>
       <td class="num-ctr">${c.priorQty > 0 ? Math.round(c.priorQty).toLocaleString() : '—'}</td>
-      <td class="num-ctr"><span class="${dollarCls}">${c.dollarChange >= 0 ? '+' : ''}${fmt$(c.dollarChange)}</span></td>
+      <td class="num-ctr"><span style="background:${dBg};color:${dCl};padding:3px 10px;border-radius:12px;font-size:14px;font-weight:700;white-space:nowrap;display:inline-block">${c.dollarChange >= 0 ? '+' : ''}${fmt$(c.dollarChange)}</span></td>
       <td class="num-ctr"><span class="${pctCls}">${pctArrow} ${pctStr}</span></td>
     </tr>`;
   }).join('');
 
+  const totalsRow = `
+    <tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e5e7eb">
+      <td style="padding:12px 14px;color:#1a2332;width:140px;max-width:140px">TOTAL</td>
+      <td class="num-ctr" style="padding:12px 8px;color:#1a2332">${fmt$(totCurrAmt)}</td>
+      <td class="num-ctr" style="padding:12px 8px;color:#1a2332">${totCurrQty > 0 ? Math.round(totCurrQty).toLocaleString() : '—'}</td>
+      <td class="num-ctr" style="padding:12px 8px;color:#1a2332">${totPriorAmt > 0 ? fmt$(totPriorAmt) : '—'}</td>
+      <td class="num-ctr" style="padding:12px 8px;color:#1a2332">${totPriorQty > 0 ? Math.round(totPriorQty).toLocaleString() : '—'}</td>
+      <td class="num-ctr" style="padding:12px 8px"><span style="background:${totDollarBg};color:${totDollarCl};padding:3px 10px;border-radius:12px;font-size:14px;font-weight:700;white-space:nowrap;display:inline-block">${totDollar >= 0 ? '+' : ''}${fmt$(totDollar)}</span></td>
+      <td class="num-ctr" style="padding:12px 8px;font-weight:700;color:${totPctCl}">${totPctStr}</td>
+    </tr>`;
+
   return `
     <div class="card" style="margin-bottom:12px;padding:0">
-      <div style="padding:16px 20px 10px;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80;border-bottom:1px solid #f3f4f6">
-        Category Breakdown — click a category to drill into items
+      <div style="padding:14px 20px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #f3f4f6">
+        <span style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80">Category Breakdown — click a category to drill into items</span>
+        <div style="display:flex;gap:8px;flex-shrink:0">
+          <button onclick="exportCatCSV()" style="display:flex;align-items:center;gap:5px;background:#f1f5f9;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export CSV
+          </button>
+          <button onclick="printCatTable()" style="display:flex;align-items:center;gap:5px;background:#f1f5f9;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+            Print
+          </button>
+        </div>
       </div>
       <div class="inv-wrap">
-        <table class="data-table">
-          <thead><tr>
-            ${th('description',   'Category')}
+        <table class="data-table" id="ca-cat-table">
+          <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
+            ${th('description',   'Category',       '',        'width:140px')}
             ${th('currentYtdAmt', 'Current YTD $', 'num-ctr')}
             ${th('currentQty',    'Curr Qty',       'num-ctr')}
             ${th('priorYtdAmt',   'Prior YTD $',    'num-ctr')}
@@ -595,25 +862,122 @@ function buildCatTable(catData) {
             ${th('pctChange',     '% Change',        'num-ctr')}
           </tr></thead>
           <tbody>${rows}</tbody>
+          <tfoot style="position:sticky;bottom:0;z-index:2">${totalsRow}</tfoot>
         </table>
       </div>
     </div>`;
 }
 
 function caSortCat(col) {
-  caCatSort.dir = caCatSort.col === col ? (caCatSort.dir === 'desc' ? 'asc' : 'desc') : 'desc';
+  const defaultDir = col === 'description' ? 'asc' : 'desc';
+  caCatSort.dir = caCatSort.col === col ? (caCatSort.dir === 'asc' ? 'desc' : 'asc') : defaultDir;
   caCatSort.col = col;
   const sec = document.getElementById('ca-cat-section');
   if (sec) sec.innerHTML = buildCatTable(window.caLastCatData || []);
 }
 
+function exportCatCSV() {
+  const data = window.caLastCatData || [];
+  if (!data.length) return;
+  const custName = (window.caLastCust && (window.caLastCust.name || window.caLastCust.custNo)) || caCustNo || 'account';
+  const headers  = ['Category', 'Current YTD $', 'Curr Qty', 'Prior YTD $', 'Prior Qty', '$ Change', '% Change'];
+  const esc      = v => `"${String(v).replace(/"/g, '""')}"`;
+  const rows = data.map(c => {
+    const pctChg = c.priorYtdAmt > 0 ? ((c.currentYtdAmt - c.priorYtdAmt) / c.priorYtdAmt * 100).toFixed(1) + '%' : '—';
+    return [
+      esc(c.description || c.categoryCode),
+      c.currentYtdAmt.toFixed(2),
+      Math.round(c.currentQty || 0),
+      c.priorYtdAmt.toFixed(2),
+      Math.round(c.priorQty || 0),
+      (c.dollarChange >= 0 ? '+' : '') + c.dollarChange.toFixed(2),
+      pctChg,
+    ].join(',');
+  });
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `${custName.replace(/[^a-z0-9]/gi, '_')}_categories.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function printCatTable() {
+  const tbl = document.getElementById('ca-cat-table');
+  if (!tbl) return;
+  const custName = (window.caLastCust && (window.caLastCust.name || window.caLastCust.custNo)) || caCustNo || 'Account';
+  const win = window.open('', '_blank', 'width=900,height=700');
+  win.document.write(`<!DOCTYPE html><html><head><title>${custName} — Category Breakdown</title>
+    <style>
+      body { font-family: Inter, Arial, sans-serif; padding: 24px; color: #1a2332; }
+      h2 { font-size: 18px; margin: 0 0 4px; }
+      p  { font-size: 12px; color: #6b7280; margin: 0 0 16px; }
+      table { border-collapse: collapse; width: 100%; font-size: 13px; }
+      th { background: #f3f4f6; text-align: left; padding: 8px 12px; font-weight: 700; border-bottom: 2px solid #e5e7eb; }
+      th.r, td.r { text-align: right; }
+      td { padding: 7px 12px; border-bottom: 1px solid #f3f4f6; }
+      tr:last-child td { font-weight: 700; background: #f8fafc; border-top: 2px solid #e5e7eb; }
+      .g { color: #059669; } .r { color: #dc2626; }
+    </style></head><body>
+    <h2>${custName} — Category Breakdown</h2>
+    <p>Printed ${new Date().toLocaleDateString()}</p>
+    <table>
+      <thead><tr>
+        <th>Category</th><th class="r">Current YTD $</th><th class="r">Curr Qty</th>
+        <th class="r">Prior YTD $</th><th class="r">Prior Qty</th>
+        <th class="r">$ Change</th><th class="r">% Change</th>
+      </tr></thead><tbody>`);
+  const data = window.caLastCatData || [];
+  let totCurr = 0, totPrior = 0, totCurrQ = 0, totPriorQ = 0;
+  data.forEach(c => {
+    totCurr += c.currentYtdAmt || 0; totPrior += c.priorYtdAmt || 0;
+    totCurrQ += c.currentQty || 0;   totPriorQ += c.priorQty || 0;
+    const dc  = c.dollarChange || 0;
+    const pct = c.priorYtdAmt > 0 ? ((c.currentYtdAmt - c.priorYtdAmt) / c.priorYtdAmt * 100) : null;
+    const dcCl  = dc >= 0 ? 'g' : 'r';
+    const pctCl = pct === null ? '' : pct >= 0 ? 'g' : 'r';
+    const fmt   = n => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    win.document.write(`<tr>
+      <td>${c.description || c.categoryCode}</td>
+      <td class="r">${fmt(c.currentYtdAmt)}</td>
+      <td class="r">${Math.round(c.currentQty || 0).toLocaleString()}</td>
+      <td class="r">${c.priorYtdAmt > 0 ? fmt(c.priorYtdAmt) : '—'}</td>
+      <td class="r">${c.priorQty > 0 ? Math.round(c.priorQty).toLocaleString() : '—'}</td>
+      <td class="r ${dcCl}">${dc >= 0 ? '+' : ''}${fmt(dc)}</td>
+      <td class="r ${pctCl}">${pct !== null ? (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%' : '—'}</td>
+    </tr>`);
+  });
+  const totDollar = totCurr - totPrior;
+  const totPct    = totPrior > 0 ? ((totCurr - totPrior) / totPrior * 100) : null;
+  const fmt = n => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  win.document.write(`<tr>
+    <td>TOTAL</td><td class="r">${fmt(totCurr)}</td>
+    <td class="r">${Math.round(totCurrQ).toLocaleString()}</td>
+    <td class="r">${fmt(totPrior)}</td>
+    <td class="r">${Math.round(totPriorQ).toLocaleString()}</td>
+    <td class="r ${totDollar >= 0 ? 'g' : 'r'}">${totDollar >= 0 ? '+' : ''}${fmt(totDollar)}</td>
+    <td class="r ${totPct === null ? '' : totPct >= 0 ? 'g' : 'r'}">${totPct !== null ? (totPct >= 0 ? '+' : '') + totPct.toFixed(1) + '%' : '—'}</td>
+  </tr>`);
+  win.document.write('</tbody></table></body></html>');
+  win.document.close();
+  win.print();
+}
+
 // ── Item drill-down ───────────────────────────────────────────
 
-async function openCategoryDrill(custNo, category) {
-  caDrill = { category, tab: 'ytd' };
-  const sec = document.getElementById('ca-cat-section');
+async function openCategoryDrill(custNo, category, defaultTab = 'best') {
+  caDrill     = { category, tab: defaultTab };
+  caDrillSort = { col: defaultTab === 'ytd' ? 'current_qty' : 'rank', dir: defaultTab === 'ytd' ? 'desc' : 'asc' };
+  const sec = document.getElementById('ca-cat-charts');
   if (!sec) return;
-  sec.innerHTML = `<div style="padding:20px;color:#6b7280">Loading items for ${category}…</div>`;
+
+  // Capture left column height NOW — before any DOM changes — so we have
+  // Destroy the chart canvases so Chart.js doesn't leak
+  if (caCharts['ca-bar-chart'])   { caCharts['ca-bar-chart'].destroy();   delete caCharts['ca-bar-chart']; }
+  if (caCharts['ca-donut-chart']) { caCharts['ca-donut-chart'].destroy(); delete caCharts['ca-donut-chart']; }
+  sec.innerHTML = `<div style="padding:20px;color:#6b7280">Loading items for <strong>${category}</strong>…</div>`;
 
   const enc = encodeURIComponent(custNo);
   const cat = encodeURIComponent(category);
@@ -625,7 +989,7 @@ async function openCategoryDrill(custNo, category) {
     ]);
     const ytdItems = ytdResp.ok ? await ytdResp.json() : [];
     const topItems = topResp.ok ? await topResp.json() : [];
-    caDrill = { category, tab: 'ytd', ytdItems, topItems };
+    caDrill = { category, tab: defaultTab, ytdItems, topItems };
     renderItemDrill();
   } catch (e) {
     sec.innerHTML = `<div style="padding:20px;color:#dc2626">Error loading items: ${e.message}</div>`;
@@ -633,70 +997,156 @@ async function openCategoryDrill(custNo, category) {
 }
 
 function renderItemDrill() {
-  const sec = document.getElementById('ca-cat-section');
+  const sec = document.getElementById('ca-cat-charts');
   if (!sec || !caDrill) return;
   const { category, tab, ytdItems = [], topItems = [] } = caDrill;
 
-  const tabBtn = (t, label) =>
-    `<button class="tier-filter-btn${tab === t ? ' active' : ''}" onclick="caDrillTab('${t}')">${label} (${t === 'ytd' ? ytdItems.length : topItems.length})</button>`;
+  const th = (key, label, cls = '') => {
+    const active = caDrillSort.col === key;
+    const icon   = active ? (caDrillSort.dir === 'asc' ? '▲' : '▼') : '⇅';
+    return `<th class="${cls} sort-th${active ? ' sort-active' : ''}" onclick="caDrillSortBy('${key}')">${label}<span class="sort-icon">${icon}</span></th>`;
+  };
+
+  const statusBadge = s => s === 'A'
+    ? `<span style="background:rgba(22,163,74,0.12);color:#059669;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700">A</span>`
+    : `<span style="background:rgba(220,38,38,0.10);color:#dc2626;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700">I</span>`;
+
+  const itemLink = itemNo =>
+    `<a href="https://www.kellisgifts.com/shop?q=${encodeURIComponent(itemNo)}" target="_blank" rel="noopener"
+       style="font-family:monospace;font-weight:600;color:#3d5a80;text-decoration:none"
+       onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${itemNo}</a>`;
+
+  // Sort the active list
+  const { col, dir } = caDrillSort;
+  const d = dir === 'asc' ? 1 : -1;
+  const list = [...(tab === 'ytd' ? ytdItems : topItems)].sort((a, b) => {
+    switch (col) {
+      case 'rank':        return d * (a.rank - b.rank);
+      case 'status':      return d * (a.status || '').localeCompare(b.status || '');
+      case 'itemNo':      return d * (a.itemNo || '').localeCompare(b.itemNo || '');
+      case 'description': return d * (a.description || '').localeCompare(b.description || '');
+      case 'prior_qty':   return d * ((a.prior_qty || 0) - (b.prior_qty || 0));
+      case 'current_qty': return d * ((a.current_qty || 0) - (b.current_qty || 0));
+      case 'cadence':     return d * (a.cadence || '').localeCompare(b.cadence || '');
+      case 'last_sold':   return d * (a.last_sold || '').localeCompare(b.last_sold || '');
+      default: return 0;
+    }
+  });
 
   let tableHTML = '';
+
   if (tab === 'ytd') {
-    const rows = ytdItems.map(i => `<tr>
-      <td style="font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80">${i.itemNo}</td>
-      <td>${i.description || '—'}</td>
-      <td class="num-ctr">${i.qty}</td>
-      <td class="num-ctr">${fmt$(i.revenue)}</td>
-      <td class="num-ctr">${i.cadence !== null ? i.cadence.toFixed(0) + 'd' : '—'}</td>
-      <td class="num-ctr">${i.lastBought || '—'}</td>
-    </tr>`).join('') || '<tr><td colspan="6" style="color:#9ca3af;padding:16px">No items found.</td></tr>';
-    tableHTML = `<table class="data-table"><thead><tr>
-      <th>Item #</th><th>Description</th>
-      <th class="num-ctr">Qty</th><th class="num-ctr">Revenue</th>
-      <th class="num-ctr">Avg Cadence</th><th class="num-ctr">Last Bought</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
+    const totYTD  = list.reduce((s, i) => s + (i.current_qty || 0), 0);
+    const totLYTD = list.reduce((s, i) => s + (i.prior_qty   || 0), 0);
+
+    const rows = list.map(i => `<tr>
+      <td style="padding:8px 10px;color:#9ca3af;text-align:center;width:36px">${i.rank}</td>
+      <td style="padding:8px 10px;text-align:center;width:48px">${statusBadge(i.status)}</td>
+      <td style="padding:8px 10px">${itemLink(i.itemNo)}</td>
+      <td style="padding:8px 10px">${i.description || '—'}</td>
+      <td class="num-ctr" style="padding:8px 10px;color:#6b7280">${i.prior_qty > 0 ? i.prior_qty : '—'}</td>
+      <td class="num-ctr" style="padding:8px 10px;font-weight:700;color:#1a2332">${i.current_qty > 0 ? i.current_qty : '—'}</td>
+      <td style="padding:8px 10px;color:#6b7280;white-space:nowrap">${i.cadence || '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:#9ca3af;padding:24px;text-align:center">No items with purchases this year or same period last year.</td></tr>';
+
+    const totRow = list.length ? `<tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e5e7eb">
+      <td colspan="4" style="padding:10px 10px;color:#1a2332">TOTAL</td>
+      <td class="num-ctr" style="padding:10px 10px;color:#6b7280">${totLYTD || '—'}</td>
+      <td class="num-ctr" style="padding:10px 10px;font-weight:800;color:#1a2332">${totYTD || '—'}</td>
+      <td></td>
+    </tr>` : '';
+
+    tableHTML = `<table class="data-table">
+      <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
+        ${th('rank',        '#',           'num-ctr')}
+        ${th('status',      'Status',      'num-ctr')}
+        ${th('itemNo',      'Item #')}
+        ${th('description', 'Description')}
+        ${th('prior_qty',   'LYTD',        'num-ctr')}
+        ${th('current_qty', 'YTD',         'num-ctr')}
+        ${th('cadence',     'Frequency', '', 'white-space:nowrap')}
+      </tr></thead>
+      <tbody>${rows}</tbody>
+      ${totRow ? `<tfoot style="position:sticky;bottom:0;z-index:2;background:#f8fafc;box-shadow:0 -2px 4px rgba(0,0,0,0.06)">${totRow}</tfoot>` : ''}
+    </table>`;
+
   } else {
-    const rows = topItems.map(i => {
-      const cls = i.custBuys ? 'vel-up' : 'vel-down';
-      const lbl = i.custBuys ? '✓ Buys' : '✗ Missing';
-      return `<tr style="${!i.custBuys ? 'background:#fff8f0' : ''}">
-        <td style="font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80">${i.itemNo}</td>
-        <td>${i.description || '—'}</td>
-        <td class="num-ctr"><span class="${cls}">${lbl}</span></td>
-        <td class="num-ctr">${fmt$(i.totalRev)}</td>
-        <td class="num-ctr">${i.custBuys ? fmt$(i.custRev) : '<span style="color:#9ca3af">—</span>'}</td>
+    // Best Selling Items tab
+    const rows = list.map(i => {
+      let lastStyle = '';
+      if (i.last_sold) {
+        const daysAgo = Math.floor((Date.now() - new Date(i.last_sold)) / 86400000);
+        if (daysAgo <= 30)  lastStyle = 'background:rgba(22,163,74,0.14);color:#059669;font-weight:600;padding:2px 6px;border-radius:6px;';
+        if (daysAgo >= 365) lastStyle = 'background:rgba(220,38,38,0.10);color:#dc2626;font-weight:600;padding:2px 6px;border-radius:6px;';
+      }
+      const notBuying = i.current_qty === 0 && i.prior_qty === 0;
+      return `<tr style="${notBuying ? 'background:#fff8f0' : ''}">
+        <td style="padding:8px 10px;color:#9ca3af;text-align:center;width:36px">${i.rank}</td>
+        <td style="padding:8px 10px;text-align:center;width:48px">${statusBadge(i.status)}</td>
+        <td style="padding:8px 10px">${itemLink(i.itemNo)}</td>
+        <td style="padding:8px 10px">${i.description || '—'}</td>
+        <td class="num-ctr" style="padding:8px 10px;color:#6b7280">${i.prior_qty > 0 ? i.prior_qty : '—'}</td>
+        <td class="num-ctr" style="padding:8px 10px;font-weight:${i.current_qty > 0 ? '700' : '400'};color:${i.current_qty > 0 ? '#1a2332' : '#9ca3af'}">${i.current_qty > 0 ? i.current_qty : '—'}</td>
+        <td style="padding:8px 10px"><span style="${lastStyle}">${i.last_sold || '—'}</span></td>
       </tr>`;
-    }).join('') || '<tr><td colspan="5" style="color:#9ca3af;padding:16px">No items found.</td></tr>';
-    tableHTML = `<table class="data-table"><thead><tr>
-      <th>Item #</th><th>Description</th>
-      <th class="num-ctr">This Acct</th><th class="num-ctr">All-Accts Rev</th>
-      <th class="num-ctr">This Acct Rev</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
+    }).join('') || '<tr><td colspan="7" style="color:#9ca3af;padding:24px;text-align:center">No best-seller items found for this category (no profCod1=Y items).</td></tr>';
+
+    tableHTML = `<table class="data-table">
+      <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
+        ${th('rank',        '#',              'num-ctr')}
+        ${th('status',      'Status',         'num-ctr')}
+        ${th('itemNo',      'Item #')}
+        ${th('description', 'Description')}
+        ${th('prior_qty',   'LYTD',           'num-ctr')}
+        ${th('current_qty', 'YTD',            'num-ctr')}
+        ${th('last_sold',   'Last Purchased')}
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
   }
 
+  sec.style.cssText = 'display:flex;flex-direction:column;align-self:stretch;min-height:0;overflow:hidden';
+  const tabLabel = tab === 'best' ? `Best Selling Items (${topItems.length})` : `YTD Purchased (${ytdItems.length})`;
+  const hintText = tab === 'best'
+    ? 'highlighted rows = not buying · green/red = recency'
+    : 'Click item # to view on kellisgifts.com';
   sec.innerHTML = `
-    <div class="card" style="margin-bottom:12px;padding:0">
-      <div style="padding:14px 20px 10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid #f3f4f6">
+    <div class="card" style="padding:0;flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:12px 16px 10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid #f3f4f6;flex-shrink:0">
         <a class="cat-back-link" onclick="closeCategoryDrill()">← Categories</a>
         <span style="color:#9ca3af">/</span>
         <span style="font-weight:600;color:#1a2332">${category}</span>
+        <span style="background:#f1f5f9;color:#3d5a80;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">${tabLabel}</span>
+        <span style="color:#9ca3af;font-size:11px">${hintText}</span>
       </div>
-      <div style="padding:12px 16px 8px;display:flex;gap:8px">
-        ${tabBtn('ytd', 'YTD Purchased')}
-        ${tabBtn('best', 'Best Sellers')}
-      </div>
-      <div class="inv-wrap">${tableHTML}</div>
+      <div class="inv-wrap" style="flex:1;overflow-y:auto">${tableHTML}</div>
     </div>`;
+
 }
 
-function caDrillTab(tab) {
-  if (caDrill) { caDrill.tab = tab; renderItemDrill(); }
+function caDrillSortBy(col) {
+  caDrillSort.dir = caDrillSort.col === col ? (caDrillSort.dir === 'asc' ? 'desc' : 'asc') : 'asc';
+  caDrillSort.col = col;
+  renderItemDrill();
 }
 
 function closeCategoryDrill() {
   caDrill = null;
-  const sec = document.getElementById('ca-cat-section');
-  if (sec) sec.innerHTML = buildCatTable(window.caLastCatData || []);
+  const charts = document.getElementById('ca-cat-charts');
+  if (charts) {
+    // Restore grid alignment to stretch (charts column tracks category column height)
+    charts.style.cssText = 'display:flex;flex-direction:column;align-self:stretch;min-height:0;overflow:hidden';
+    charts.innerHTML = `
+      <div class="chart-panel" style="margin-bottom:12px;flex-shrink:0">
+        <div class="chart-title">Category Mix</div>
+        <div class="chart-container" style="height:300px"><canvas id="ca-donut-chart"></canvas></div>
+      </div>
+      <div class="chart-panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div class="chart-title">Category % Change vs Prior YTD</div>
+        <div class="chart-container" style="flex:1;height:0;min-height:150px;position:relative"><canvas id="ca-bar-chart"></canvas></div>
+      </div>`;
+    setTimeout(() => renderCACharts(window.caLastCatData || [], window.caLastOrders || []), 0);
+  }
 }
 
 // ── AI Chat ───────────────────────────────────────────────────
@@ -1180,7 +1630,7 @@ function buildOrderHistory(orders) {
     <table class="data-table" id="ca-orders-table">
       <thead><tr>
         <th style="width:18px"></th>
-        <th>Date</th><th>Ticket #</th><th>Items</th><th class="num-ctr">Total</th>
+        <th style="color:#fff">Date</th><th style="color:#fff">Ticket #</th><th style="color:#fff">Items</th><th class="num-ctr" style="color:#fff">Total</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -1280,6 +1730,106 @@ function buildNotesList(custNo) {
       <div style="font-size:14px;color:#374151">${n.text}</div>
     </div>`;
   }).join('');
+}
+
+// ── Activity Log ─────────────────────────────────────────────
+
+const ACTIVITY_KEY = cn => `ks_activity_${cn}`;
+
+function activityLogOpen(custNo) {
+  const overlay = document.getElementById('activity-modal-overlay');
+  if (!overlay) return;
+  document.getElementById('activity-cust-no').value = custNo;
+  document.getElementById('activity-type').value    = 'Call';
+  document.getElementById('activity-duration').value = '';
+  document.getElementById('activity-notes').value    = '';
+  activityToggleDuration();
+  overlay.style.display = 'flex';
+  document.getElementById('activity-type').focus();
+}
+
+function activityLogClose() {
+  const overlay = document.getElementById('activity-modal-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+function activityToggleDuration() {
+  const type = (document.getElementById('activity-type') || {}).value;
+  const row  = document.getElementById('activity-duration-row');
+  if (row) row.style.display = (type === 'Call' || type === 'Visit') ? 'block' : 'none';
+}
+
+function activityLogSave() {
+  const custNo   = (document.getElementById('activity-cust-no')  || {}).value || '';
+  const type     = (document.getElementById('activity-type')      || {}).value || 'Other';
+  const duration = parseInt((document.getElementById('activity-duration') || {}).value) || null;
+  const notes    = ((document.getElementById('activity-notes') || {}).value || '').trim();
+  if (!custNo) return;
+
+  const now      = new Date();
+  const entry = {
+    id:       now.getTime(),
+    date:     now.toISOString().slice(0, 10),
+    time:     now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+    type,
+    duration: (type === 'Call' || type === 'Visit') ? duration : null,
+    notes,
+  };
+
+  const log = JSON.parse(localStorage.getItem(ACTIVITY_KEY(custNo)) || '[]');
+  log.unshift(entry); // most recent first
+  localStorage.setItem(ACTIVITY_KEY(custNo), JSON.stringify(log));
+
+  activityLogClose();
+  const listEl = document.getElementById('ca-activity-list');
+  if (listEl) listEl.innerHTML = buildActivityList(custNo);
+}
+
+function activityLogDelete(custNo, id) {
+  const log = JSON.parse(localStorage.getItem(ACTIVITY_KEY(custNo)) || '[]');
+  const updated = log.filter(e => e.id !== id);
+  localStorage.setItem(ACTIVITY_KEY(custNo), JSON.stringify(updated));
+  const listEl = document.getElementById('ca-activity-list');
+  if (listEl) listEl.innerHTML = buildActivityList(custNo);
+}
+
+function buildActivityList(custNo) {
+  const log = JSON.parse(localStorage.getItem(ACTIVITY_KEY(custNo)) || '[]');
+  if (!log.length) return '<div style="font-size:13px;color:#9ca3af;padding:4px 0">No activity logged yet.</div>';
+
+  const typeIcon = { Call: '📞', Email: '✉️', Visit: '🤝', Other: '📝' };
+  const typeColor = { Call: '#3d5a80', Email: '#0d9488', Visit: '#059669', Other: '#6b7280' };
+
+  return `<table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:4px">
+    <thead>
+      <tr style="border-bottom:1px solid #e5e7eb;color:#9ca3af;font-size:11px;font-weight:600;text-transform:uppercase">
+        <th style="padding:6px 8px;text-align:left">Date</th>
+        <th style="padding:6px 8px;text-align:left">Time</th>
+        <th style="padding:6px 8px;text-align:left">Type</th>
+        <th style="padding:6px 8px;text-align:left">Duration</th>
+        <th style="padding:6px 8px;text-align:left">Notes</th>
+        <th style="padding:6px 8px;text-align:center;width:28px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      ${log.map(e => `
+        <tr style="border-bottom:1px solid #f3f4f6">
+          <td style="padding:7px 8px;color:#374151;white-space:nowrap">${e.date}</td>
+          <td style="padding:7px 8px;color:#6b7280;white-space:nowrap">${e.time || '—'}</td>
+          <td style="padding:7px 8px;white-space:nowrap">
+            <span style="display:inline-flex;align-items:center;gap:4px;background:${typeColor[e.type] || '#6b7280'}18;color:${typeColor[e.type] || '#6b7280'};border-radius:4px;padding:2px 8px;font-weight:600;font-size:12px">
+              ${typeIcon[e.type] || '📝'} ${e.type}
+            </span>
+          </td>
+          <td style="padding:7px 8px;color:#6b7280">${e.duration != null ? e.duration + ' min' : '—'}</td>
+          <td style="padding:7px 8px;color:#374151;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(e.notes || '').replace(/"/g,'&quot;')}">${e.notes || '—'}</td>
+          <td style="padding:7px 8px;text-align:center">
+            <button onclick="activityLogDelete('${custNo}',${e.id})"
+              style="background:none;border:none;cursor:pointer;color:#d1d5db;font-size:14px;padding:2px 4px;line-height:1;border-radius:3px" title="Delete">✕</button>
+          </td>
+        </tr>`).join('')}
+    </tbody>
+  </table>`;
 }
 
 // ── Welcome state (no customer selected) ─────────────────────

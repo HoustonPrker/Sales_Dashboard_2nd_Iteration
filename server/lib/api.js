@@ -13,12 +13,22 @@ function authHeaders() {
   return { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' };
 }
 
+const DEBUG = process.env.DEBUG === '1';
+
 async function doFetch(method, urlPath, opts = {}) {
   const url = `${API_BASE}${urlPath}`;
   const t0  = Date.now();
   const res = await fetch(url, { method, headers: authHeaders(), ...opts });
-  console.log(`  ${method} ${urlPath} → ${res.status} (${Date.now() - t0}ms)`);
+  if (DEBUG) console.log(`  ${method} ${urlPath} → ${res.status} (${Date.now() - t0}ms)`);
   return res;
+}
+
+// Log a route timing summary: routeTimer('GET /proxy/accounts', t0, { customers: 42, calls: 42 })
+function routeTimer(label, t0, extra = {}) {
+  const ms    = Date.now() - t0;
+  const secs  = (ms / 1000).toFixed(2);
+  const parts = Object.entries(extra).map(([k, v]) => `${k}=${v}`).join(' ');
+  console.log(`⏱  ${label} → ${secs}s${parts ? '  [' + parts + ']' : ''}`);
 }
 
 async function fetchAllPages(urlPath) {
@@ -37,6 +47,32 @@ async function fetchAllPages(urlPath) {
     page++;
   }
   return records;
+}
+
+// Parallel page fetcher: fetches page 1 to learn totalPages, then fires all
+// remaining pages simultaneously. Dramatically faster for large result sets.
+async function fetchAllPagesPar(urlPath) {
+  const sep = urlPath.includes('?') ? '&' : '?';
+
+  const res1  = await doFetch('GET', `${urlPath}${sep}page=1`);
+  if (!res1.ok) return [];
+  const body1 = await res1.json();
+  const data1 = body1.data ?? body1;
+  const page1 = Array.isArray(data1) ? data1 : (data1.Items || data1.items || []);
+
+  const totalPages = body1.totalPages ?? data1.totalPages ?? 1;
+  if (totalPages <= 1) return page1;
+
+  const rest = await Promise.all(
+    Array.from({ length: totalPages - 1 }, (_, i) =>
+      doFetch('GET', `${urlPath}${sep}page=${i + 2}`)
+        .then(r => r.ok ? r.json() : {})
+        .then(b => { const d = b.data ?? b; return Array.isArray(d) ? d : (d.Items || d.items || []); })
+        .catch(() => [])
+    )
+  );
+
+  return page1.concat(rest.flat());
 }
 
 // Strip size/variant suffix to get base item number
@@ -85,7 +121,8 @@ function aggregateLineItems(lines) {
 }
 
 module.exports = {
-  doFetch, fetchAllPages, authHeaders,
+  doFetch, fetchAllPages, fetchAllPagesPar, authHeaders,
   baseItemNo, ytdDateRange, calcCadence, aggregateLineItems,
+  routeTimer,
   SALES_REP, API_BASE, API_KEY,
 };

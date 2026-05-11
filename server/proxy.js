@@ -25,6 +25,7 @@ app.use((req, res, next) => {
 app.use('/proxy', require('./routes/customers'));
 app.use('/proxy', require('./routes/categories'));
 app.use('/proxy', require('./routes/items'));
+app.use('/proxy', require('./routes/overview'));
 app.use('/proxy/ai', require('./routes/ai'));
 
 // ── Static files (serve the project root) ────────────────────
