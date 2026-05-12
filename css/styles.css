@@ -358,6 +358,13 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
   gap: 3px;
   min-height: 90px;
   box-sizing: border-box;
+  cursor: default;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+.mgr-pill:hover {
+  background: rgba(255,255,255,0.18);
+  border-color: rgba(255,255,255,0.30);
+  transform: translateY(-2px);
 }
 .mgr-pill-label {
   font-size: 11px;

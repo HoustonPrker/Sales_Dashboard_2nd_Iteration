@@ -361,7 +361,7 @@ function renderCA(cust, catData, mtd, orders) {
             </div>
             <div class="mgr-pill">
               <div class="mgr-pill-label">% to Target</div>
-              <div class="mgr-pill-value" style="color:${runRateColor}">${target > 0 ? (pctToTgt * 100).toFixed(1) + '%' : '—'}</div>
+              <div class="mgr-pill-value">${target > 0 ? (pctToTgt * 100).toFixed(1) + '%' : '—'}</div>
               <div class="mgr-pill-sub">${chgStr} vs prior year</div>
             </div>
             <div class="mgr-pill">
