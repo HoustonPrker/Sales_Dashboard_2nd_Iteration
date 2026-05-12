@@ -8,6 +8,7 @@ let caCharts      = {};
 let caCatSort     = { col: 'description', dir: 'asc' };
 let caDrill       = null; // null = overview | { category, tab: 'ytd'|'best' }
 let caDrillSort   = { col: 'rank', dir: 'asc' };
+let caDrillResizeHandler = null;
 let caAiCtrl      = null; // AbortController for in-flight AI stream
 let caConversation = [];  // [{role,content}] full chat history
 
@@ -1130,6 +1131,24 @@ function renderItemDrill() {
       <div class="inv-wrap" style="flex:1;overflow-y:auto">${tableHTML}</div>
     </div>`;
 
+  // Left panel drives height: constrain right panel to match left's natural height.
+  // Switch grid to align-items:start so right panel doesn't auto-stretch past its set height.
+  if (caDrillResizeHandler) { window.removeEventListener('resize', caDrillResizeHandler); caDrillResizeHandler = null; }
+  requestAnimationFrame(() => {
+    const left  = document.getElementById('ca-cat-section');
+    const right = sec;
+    const grid  = right && right.parentElement;
+    if (!left || !right || !grid) return;
+    const syncHeight = () => {
+      const h = left.getBoundingClientRect().height;
+      right.style.height = h + 'px';
+    };
+    grid.style.alignItems = 'start';
+    syncHeight();
+    caDrillResizeHandler = syncHeight;
+    window.addEventListener('resize', caDrillResizeHandler);
+  });
+
 }
 
 function caDrillSortBy(col) {
@@ -1140,9 +1159,13 @@ function caDrillSortBy(col) {
 
 function closeCategoryDrill() {
   caDrill = null;
+  if (caDrillResizeHandler) { window.removeEventListener('resize', caDrillResizeHandler); caDrillResizeHandler = null; }
   const charts = document.getElementById('ca-cat-charts');
   if (charts) {
-    // Restore grid alignment to stretch (charts column tracks category column height)
+    const grid = charts.parentElement;
+    if (grid) grid.style.alignItems = 'stretch';
+    // Clear explicit height set during drill-down before restoring cssText
+    charts.style.height = '';
     charts.style.cssText = 'background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);display:flex;flex-direction:column;min-height:0;overflow:hidden';
     charts.innerHTML = `
       <div style="flex:1;display:flex;flex-direction:column;min-height:0;padding:16px 18px 8px;border-bottom:1px solid #f3f4f6">
