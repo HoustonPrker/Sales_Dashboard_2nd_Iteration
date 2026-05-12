@@ -445,7 +445,7 @@ function renderCA(cust, catData, mtd, orders) {
     </div>
 
     <!-- Category: table left, charts right — grid drives shared height -->
-    <div style="display:grid;grid-template-columns:minmax(min-content,1fr) minmax(0,1fr);gap:16px;align-items:stretch;margin-bottom:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch;margin-bottom:12px">
 
       <!-- Left: category table (no margin-bottom — grid owns the spacing) -->
       <div id="ca-cat-section" style="display:flex;flex-direction:column;min-height:0">
@@ -1056,11 +1056,12 @@ function renderItemDrill() {
       <td style="padding:8px 10px;color:#6b7280;white-space:nowrap">${i.cadence || '—'}</td>
     </tr>`).join('') || '<tr><td colspan="7" style="color:#9ca3af;padding:24px;text-align:center">No items with purchases this year or same period last year.</td></tr>';
 
-    const totRow = list.length ? `<tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e5e7eb">
-      <td colspan="4" style="padding:10px 10px;color:#1a2332">TOTAL</td>
-      <td class="num-ctr" style="padding:10px 10px;color:#6b7280">${totLYTD || '—'}</td>
-      <td class="num-ctr" style="padding:10px 10px;font-weight:800;color:#1a2332">${totYTD || '—'}</td>
-      <td></td>
+    const stickyTd = 'position:sticky;bottom:0;z-index:2;background:#f8fafc;border-top:2px solid #e5e7eb;font-weight:700;box-shadow:0 -2px 4px rgba(0,0,0,0.06)';
+    const totRow = list.length ? `<tr>
+      <td colspan="4" style="${stickyTd};padding:10px 10px;color:#1a2332">TOTAL</td>
+      <td class="num-ctr" style="${stickyTd};padding:10px 10px;color:#6b7280">${totLYTD || '—'}</td>
+      <td class="num-ctr" style="${stickyTd};padding:10px 10px;font-weight:800;color:#1a2332">${totYTD || '—'}</td>
+      <td style="${stickyTd};padding:10px 10px"></td>
     </tr>` : '';
 
     tableHTML = `<table class="data-table">
@@ -1074,7 +1075,7 @@ function renderItemDrill() {
         ${th('cadence',     'Frequency', '', 'white-space:nowrap')}
       </tr></thead>
       <tbody>${rows}</tbody>
-      ${totRow ? `<tfoot style="position:sticky;bottom:0;z-index:2;background:#f8fafc;box-shadow:0 -2px 4px rgba(0,0,0,0.06)">${totRow}</tfoot>` : ''}
+      ${totRow ? `<tfoot>${totRow}</tfoot>` : ''}
     </table>`;
 
   } else {
@@ -1144,13 +1145,13 @@ function closeCategoryDrill() {
     // Restore grid alignment to stretch (charts column tracks category column height)
     charts.style.cssText = 'background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);display:flex;flex-direction:column;min-height:0;overflow:hidden';
     charts.innerHTML = `
-      <div class="chart-panel" style="margin-bottom:12px;flex-shrink:0">
-        <div class="chart-title">Category Mix</div>
-        <div class="chart-container" style="height:300px"><canvas id="ca-donut-chart"></canvas></div>
+      <div style="flex:1;display:flex;flex-direction:column;min-height:0;padding:16px 18px 8px;border-bottom:1px solid #f3f4f6">
+        <div class="chart-title" style="margin-bottom:8px">Category Mix</div>
+        <div style="flex:1;min-height:0;position:relative"><canvas id="ca-donut-chart"></canvas></div>
       </div>
-      <div class="chart-panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
-        <div class="chart-title">Category % Change vs Prior YTD</div>
-        <div class="chart-container" style="flex:1;height:0;min-height:150px;position:relative"><canvas id="ca-bar-chart"></canvas></div>
+      <div style="flex:2;display:flex;flex-direction:column;min-height:0;padding:16px 18px 12px">
+        <div class="chart-title" style="margin-bottom:8px">Category % Change vs Prior YTD</div>
+        <div style="flex:1;min-height:0;position:relative"><canvas id="ca-bar-chart"></canvas></div>
       </div>`;
     setTimeout(() => renderCACharts(window.caLastCatData || [], window.caLastOrders || []), 0);
   }

@@ -174,7 +174,7 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 .chart-container { position: relative; height: 240px; }
 
 /* ── DATA TABLE ──────────────────────────── */
-.inv-wrap   { overflow-x: auto; border-radius: 6px; overflow: hidden; }
+.inv-wrap   { overflow: auto; border-radius: 6px; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 15px; background: #fff; }
 .data-table th { background: #3d5a80; color: #fff; padding: 11px 14px; text-align: left; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; border-right: 1px solid rgba(255,255,255,0.1); white-space: nowrap; }
 .data-table td { padding: 14px 14px; border-bottom: 1px solid #e5e7eb; border-right: 1px solid #f3f4f6; white-space: nowrap; color: #1a2332; }
