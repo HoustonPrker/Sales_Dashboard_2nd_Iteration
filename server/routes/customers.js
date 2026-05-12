@@ -9,7 +9,7 @@
 
 const express      = require('express');
 const router       = express.Router();
-const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP } = require('../lib/api');
+const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP, MONTHLY_GROWTH_GOAL_PCT } = require('../lib/api');
 const categoryCache = require('../lib/category-cache');
 
 // ── In-memory cache keyed by rep (5-minute TTL) ───────────────
@@ -173,7 +173,8 @@ router.get('/accounts', async (req, res) => {
     const repTicketFilter = rep ? `SalesRep:eq:${encodeURIComponent(rep)},` : '';
 
     const pyMonthStart = `${yr - 1}-${mm}-01`;
-    const pyMonthEnd   = `${yr - 1}-${mm}-${dd}`;
+    // Last day of the full prior-year same month (not today's day last year)
+    const pyMonthEnd   = new Date(yr - 1, parseInt(mm, 10), 0).toISOString().slice(0, 10);
 
     const t1 = Date.now();
     const [customers, cyTickets, pyTickets, pyMonthTickets] = await Promise.all([
@@ -190,7 +191,7 @@ router.get('/accounts', async (req, res) => {
       ),
       // PY same month tickets — used for per-account monthly goal (matches customer account page)
       fetchAllPages(
-        `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=CustNo,Total&pageSize=500`
+        `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=CustNo,saleSubtotal,returnSubtotal&pageSize=500`
       ),
     ]);
     console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY / ${pyMonthTickets.length} pyMonth tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
@@ -215,7 +216,8 @@ router.get('/accounts', async (req, res) => {
     for (const t of pyMonthTickets) {
       const c = (t.CustNo || t.custNo || '').trim();
       if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0, monthGoal: 0 };
-      if (c) salesMap[c].monthGoal += parseFloat(t.Total || t.total || 0);
+      if (c) salesMap[c].monthGoal += parseFloat(t.saleSubtotal || t.SaleSubtotal || 0)
+                                    + parseFloat(t.returnSubtotal || t.ReturnSubtotal || 0);
     }
 
     // 3. Build account records
@@ -241,7 +243,7 @@ router.get('/accounts', async (req, res) => {
         salesRep:       c.salesRep || '',
         ytdSales:       +ytdSales.toFixed(2),
         priorYtd:       +priorYtd.toFixed(2),
-        monthGoal:      +s.monthGoal.toFixed(2),
+        monthGoal:      +(s.monthGoal * (1 + MONTHLY_GROWTH_GOAL_PCT)).toFixed(2),
         target:         +target.toFixed(2),
         pctToTarget:    +pctToTarget.toFixed(4),
         daysSinceOrder: daysSince,
@@ -251,6 +253,8 @@ router.get('/accounts', async (req, res) => {
     });
 
     accounts.sort((a, b) => b.ytdSales - a.ytdSales);
+    // Bust any stale cache entries that may have been built before this fix
+    Object.keys(accountsCache).forEach(k => { if (k !== cacheKey) delete accountsCache[k]; });
     accountsCache[cacheKey] = { data: accounts, ts: Date.now() };
     routeTimer('GET /proxy/accounts', t0, { customers: customers.length, cyTickets: cyTickets.length, pyTickets: pyTickets.length });
     res.json(accounts);
@@ -394,6 +398,7 @@ router.get('/order-detail/:ticketNo', async (req, res) => {
 
     const baseLines = (raw.lineItems || []).map(l => ({
       itemNo:      (l.itemNo || '').trim(),
+      category:    l.categoryCode || l.category || l.deptCode || l.dept || '',
       description: l.description || '',
       qty:         parseFloat(l.quantity  || l.qty    || 0),
       unitPrice:   parseFloat(l.price     || 0),

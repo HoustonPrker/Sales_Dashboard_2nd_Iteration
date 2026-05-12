@@ -7,7 +7,8 @@ const fetch = require('node-fetch');
 
 const API_BASE  = (process.env.API_BASE_URL || 'http://172.16.20.185:8084').replace(/\/$/, '');
 const API_KEY   = process.env.API_KEY  || '';
-const SALES_REP = process.env.SALES_REP || '';
+const SALES_REP              = process.env.SALES_REP || '';
+const MONTHLY_GROWTH_GOAL_PCT = parseFloat(process.env.MONTHLY_GROWTH_GOAL_PCT || '0');
 
 function authHeaders() {
   return { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json' };
@@ -124,5 +125,5 @@ module.exports = {
   doFetch, fetchAllPages, fetchAllPagesPar, authHeaders,
   baseItemNo, ytdDateRange, calcCadence, aggregateLineItems,
   routeTimer,
-  SALES_REP, API_BASE, API_KEY,
+  SALES_REP, API_BASE, API_KEY, MONTHLY_GROWTH_GOAL_PCT,
 };

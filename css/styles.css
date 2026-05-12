@@ -521,3 +521,47 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
 }
 .ai-chat-send:hover { background: #2d4a6e; }
 .ai-chat-send:disabled { background: #94a3b8; cursor: not-allowed; }
+
+/* ── PRINT / PDF (order detail) ──────────────── */
+@media print {
+  /* Hide everything except the order detail panel */
+  .nav-bar, .tab-bar, .main-content > *:not(#tab-item),
+  #tab-accounts, #tab-leaderboard, #tab-ip,
+  .od-no-print { display: none !important; }
+
+  /* Show and expand the item tab panel */
+  body { background: #fff; }
+  .main-content { padding: 0; }
+  #tab-item { display: block !important; padding: 0; }
+  #customer-account-panel { padding: 0; }
+
+  /* Re-color the blue header for print legibility */
+  #od-header {
+    background: #fff !important;
+    border: 1.5px solid #3d5a80;
+    color: #1a2332 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* KPI pills on white background */
+  .od-kpi-pill {
+    background: #f0f4f8 !important;
+    border: 1px solid #cbd5e1 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .od-kpi-pill div { color: #1a2332 !important; }
+
+  /* Force color printing for tags and margin colors */
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* Cards keep their borders */
+  .card { box-shadow: none; border: 1px solid #e5e7eb; }
+
+  /* Table fits the page */
+  .inv-wrap { overflow: visible !important; max-height: none !important; }
+  .data-table { font-size: 11px; }
+  .data-table thead { background: #f0f4f8 !important; }
+  thead th { background: #f0f4f8 !important; color: #1a2332 !important; }
+}
