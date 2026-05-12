@@ -56,37 +56,38 @@ function computeTier(pctToTarget, daysSince, ytdSales, priorYtd) {
 // Each rep has 4 user records: REPID, REPID-ACT, REPID-INA, REPID-NEW.
 // Customer.salesRep stores the usrId directly (e.g. "BRIANH-ACT").
 // We show only the -ACT variants so the picker maps 1:1 to active customer accounts.
-const normalizeRepId = id => (id || '').toUpperCase().replace(/-ACTIVE$|-ACT$/, '').trim();
-
 router.get('/reps', async (req, res) => {
   try {
-    // Both calls in parallel — customers only needs salesRep field, one large page
-    const [usersRes, custRes] = await Promise.all([
-      doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS&fields=usrId,name&pageSize=500`),
-      doFetch('GET', `/api/v1/Customers?fields=salesRep&pageSize=500`),
-    ]);
-
-    // Normalized set of rep IDs that own at least one customer
-    const custBody = custRes.ok ? await custRes.json() : {};
-    const custRows = custBody.data || (Array.isArray(custBody) ? custBody : []);
-    const repsWithAccounts = new Set(
-      custRows.map(c => normalizeRepId(c.salesRep)).filter(Boolean)
-    );
-
+    // Step 1: get all active KGS users
+    const usersRes = await doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS&fields=usrId,name&pageSize=500`);
     const body = usersRes.ok ? await usersRes.json() : {};
     const rows = body.data || (Array.isArray(body) ? body : []);
-    const reps = rows
+    const activeUsers = rows
       .filter(u => {
         const id = (u.usrId || '').toUpperCase();
-        const isActive = id.endsWith('-ACT') || id.endsWith('-ACTIVE');
-        return isActive && repsWithAccounts.has(normalizeRepId(id));
+        return id.endsWith('-ACT') || id.endsWith('-ACTIVE');
       })
       .map(u => ({
         id:   (u.usrId || '').trim(),
         name: (u.name  || u.usrId || '').trim()
                 .replace(/\s*[-–]\s*(ACTIVE|ACT)$/i, '').trim(),
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      }));
+
+    // Step 2: check each user for at least 1 customer (all in parallel, pageSize=1)
+    const checked = await Promise.all(
+      activeUsers.map(async u => {
+        try {
+          const r = await doFetch('GET',
+            `/api/v1/Customers?filter=salesRep:eq:${encodeURIComponent(u.id)}&fields=custNo&pageSize=1`);
+          if (!r.ok) return null;
+          const b = await r.json();
+          const items = (b.data ?? (Array.isArray(b) ? b : b.Items ?? b.items ?? []));
+          return items.length > 0 ? u : null;
+        } catch (_) { return null; }
+      })
+    );
+
+    const reps = checked.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
     res.json(reps);
   } catch (e) {
     console.error('/proxy/reps error:', e.message);
