@@ -307,7 +307,7 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
 .tier-low      { background: #6b7280; }
 /* Account health tier badges */
 .tier-healthy   { background: #059669; }
-.tier-attention { background: #d97706; }
+.tier-attention { background: #eab308; }
 .tier-atrisk    { background: #ea580c; }
 .tier-critical  { background: #dc2626; }
 
@@ -345,6 +345,14 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
 /* Customer account uses 5-column layout */
 .mgr-pill-row.ca-kpi-row {
   grid-template-columns: repeat(5, 1fr);
+}
+/* Compact pills on customer account page — free up space for donut */
+.ca-kpi-row .mgr-pill {
+  padding: 8px 8px;
+  min-height: 0;
+}
+.ca-kpi-row .mgr-pill-value {
+  font-size: 18px;
 }
 
 /* Individual pill cards — fixed height so all boxes match */
@@ -411,7 +419,6 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
 .kpi-info-wrap:hover .kpi-tooltip-box { display: block; }
 
 /* Year run rate pill */
-.mgr-pill-runrate .mgr-pill-value { font-size: 28px; }
 .mgr-runrate-bar-track {
   width: 100%;
   height: 4px;

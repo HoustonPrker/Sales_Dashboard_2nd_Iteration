@@ -54,7 +54,26 @@ async function loadCustomerAccount(custNo) {
 
     renderCA(cust, catData, mtd, orders);
     ensureAITab();
-    setTimeout(() => renderCACharts(catData, orders), 0);
+    setTimeout(() => {
+      renderCACharts(catData, orders);
+
+      // Sync drill panel height to left table — left sizes to content, right matches
+      const catSec    = document.getElementById('ca-cat-section');
+      const drillPanel = document.getElementById('ca-drill-panel');
+      if (catSec && drillPanel) {
+        const syncH = () => {
+          const h = catSec.offsetHeight;
+          if (h > 0) drillPanel.style.height = h + 'px';
+        };
+        syncH();
+        if (window._caDrillObserver) window._caDrillObserver.disconnect();
+        window._caDrillObserver = new ResizeObserver(syncH);
+        window._caDrillObserver.observe(catSec);
+      }
+
+      const topCat = [...catData].filter(c => c.currentYtdAmt > 0).sort((a, b) => b.currentYtdAmt - a.currentYtdAmt)[0];
+      if (topCat) openCategoryDrill(custNo, topCat.categoryCode, 'ytd');
+    }, 0);
     startAIPitch(cust, catData, mtd);
   } catch (e) {
     const p = document.getElementById('customer-account-panel');
@@ -180,11 +199,24 @@ function renderCA(cust, catData, mtd, orders) {
   const lastDate  = cust.lastSaleDate ? cust.lastSaleDate.slice(0, 10) : null;
   const daysSince = lastDate ? Math.floor((Date.now() - new Date(lastDate)) / 86400000) : null;
 
-  const ytdTotal   = catData.reduce((s, c) => s + c.currentYtdAmt, 0);
-  const priorTotal = catData.reduce((s, c) => s + c.priorYtdAmt,   0);
-  const target     = priorTotal;
-  const pctToTgt   = target > 0 ? ytdTotal / target : 0;
-  const pctChange  = priorTotal > 0 ? (ytdTotal - priorTotal) / priorTotal : null;
+  // Authoritative KPIs from customer record custom fields (set by NCR at the account level).
+  // These match v1 exactly and cover full calendar years, not same-period partials.
+  const custYtdSales  = parseFloat(cust.USER_YTD_SALES      || 0) || null; // CY YTD
+  const custPytdSales = parseFloat(cust.USER_PYTD_SALES     || 0) || null; // full prior year
+  const custPpytdSales= parseFloat(cust.USER_PPYTD_SALES    || 0) || null; // full prior-prior year
+  const annualTarget  = parseFloat(cust.USER_ANNUAL_GOALS   || 0) || null; // annual goal
+  const custLifetime  = parseFloat(cust.USER_LIFETIME_SALES || 0) || null; // lifetime total
+
+  // Fall back to catData sums if custom fields are absent
+  const catYtd     = catData.reduce((s, c) => s + c.currentYtdAmt, 0);
+  const priorTotal = catData.reduce((s, c) => s + c.priorYtdAmt,   0); // same-period, used in category table only
+
+  const ytdTotal  = custYtdSales  ?? catYtd;
+  const target    = annualTarget  ?? priorTotal;
+  const pctToTgt  = target > 0 ? ytdTotal / target : 0;
+  const pctChange = custPytdSales > 0 ? (ytdTotal - custPytdSales) / custPytdSales
+                  : priorTotal    > 0 ? (ytdTotal - priorTotal)    / priorTotal
+                  : null;
   const mtdTotal   = mtd?.total || 0;
 
   // ── Derived KPIs ──────────────────────────────────────────────
@@ -225,17 +257,20 @@ function renderCA(cust, catData, mtd, orders) {
   const _moTotal   = _countBD(_moStart, _moEnd);
   const monthRunRatePct = _moTotal > 0 ? (_moElapsed / _moTotal * 100).toFixed(1) : '0.0';
 
-  // Prior-prior year (same Jan 1 – today window, 2 years ago) — derived from order history
+  // Prior-prior year — from customer record (full calendar year), falls back to 2-yr order window
   const ppyStart = `${yr - 2}-01-01`;
   const ppyEnd   = `${yr - 2}-${mm}-${dd}`;
-  const ppyTotal = orders.filter(o => o.date >= ppyStart && o.date <= ppyEnd)
-                         .reduce((s, o) => s + (o.amount || 0), 0);
+  const ppyOrderTotal = orders.filter(o => o.date >= ppyStart && o.date <= ppyEnd)
+                               .reduce((s, o) => s + (o.amount || 0), 0);
+  const ppyTotal = custPpytdSales ?? (ppyOrderTotal > 0 ? ppyOrderTotal : 0);
 
-  // Monthly goal: prior year same month orders
+  // Monthly goal: prior year FULL month (not same-day partial — matches v1)
   const pyMonthStart = `${yr - 1}-${mm}-01`;
-  const pyMonthEnd   = `${yr - 1}-${mm}-${dd}`;
-  const monthGoal = orders.filter(o => o.date >= pyMonthStart && o.date <= pyMonthEnd)
-                          .reduce((s, o) => s + (o.amount || 0), 0);
+  const pyMonthEnd   = new Date(yr - 1, parseInt(mm, 10), 0).toISOString().slice(0, 10);
+  const monthGoal = orders.filter(o => {
+    const d = (o.date || '').slice(0, 10);
+    return d >= pyMonthStart && d <= pyMonthEnd;
+  }).reduce((s, o) => s + (o.amount || 0), 0);
   const mtdPctOfGoal = monthGoal > 0 ? (mtdTotal / monthGoal * 100).toFixed(1) : null;
 
   // Orders in last 12 months + avg cadence
@@ -261,10 +296,9 @@ function renderCA(cust, catData, mtd, orders) {
     cust.currentYtdSales || cust.salesYtd || 0
   ) || null;
 
-  // Lifetime / 2-year sales — sum all orders from the 2-year history window
-  const lifetimeSales = orders.length > 0
-    ? orders.reduce((s, o) => s + (o.amount || 0), 0)
-    : (cust.totalSales || cust.lifetimeSales || cust.totSales || cust.lifeSales || null);
+  // Lifetime sales — use authoritative customer field, fall back to 2-yr order sum
+  const ordersSum     = orders.reduce((s, o) => s + (o.amount || 0), 0);
+  const lifetimeSales = custLifetime ?? (ordersSum > 0 ? ordersSum : null);
   const customerSince = cust.createDate || cust.openDate || cust.firstSaleDate || null;
   const custAge = customerSince ? Math.floor((now2 - new Date(customerSince)) / (365.25 * 86400000)) : null;
   const customerAgeStr = (() => {
@@ -343,7 +377,10 @@ function renderCA(cust, catData, mtd, orders) {
           <div style="margin-top:6px;font-size:12px;color:rgba(255,255,255,0.55);font-family:monospace;letter-spacing:0.5px">${custNo}</div>
         </div>
 
-        <!-- Right: 2-row KPI grid -->
+        <!-- Right: KPI grid + donut -->
+        <div style="flex:1;display:flex;gap:0;align-items:stretch">
+
+        <!-- KPI pills -->
         <div style="flex:1;display:flex;flex-direction:column;gap:8px;padding:12px 0">
 
           <!-- Row 1: Annual Retail Sales | Annual Target | % to Target | Prior Year | Month to Date -->
@@ -356,7 +393,7 @@ function renderCA(cust, catData, mtd, orders) {
             <div class="mgr-pill">
               <div class="mgr-pill-label">Annual Target</div>
               <div class="mgr-pill-value">${target > 0 ? fmt$(target) : '—'}</div>
-              <div class="mgr-pill-sub">Prior full year baseline</div>
+              <div class="mgr-pill-sub">Full prior year goal</div>
             </div>
             <div class="mgr-pill">
               <div class="mgr-pill-label">% to Target</div>
@@ -365,8 +402,8 @@ function renderCA(cust, catData, mtd, orders) {
             </div>
             <div class="mgr-pill">
               <div class="mgr-pill-label">Prior Year</div>
-              <div class="mgr-pill-value">${priorTotal > 0 ? fmt$(priorTotal) : '—'}</div>
-              <div class="mgr-pill-sub">Same period last year</div>
+              <div class="mgr-pill-value">${custPytdSales ? fmt$(custPytdSales) : priorTotal > 0 ? fmt$(priorTotal) : '—'}</div>
+              <div class="mgr-pill-sub">Full prior year</div>
             </div>
             <div class="mgr-pill">
               <div class="mgr-pill-label">Month to Date</div>
@@ -406,7 +443,7 @@ function renderCA(cust, catData, mtd, orders) {
             <div class="mgr-pill">
               <div class="mgr-pill-label">YTD Sales</div>
               <div class="mgr-pill-value">${fmt$(ytdTotal)}</div>
-              <div class="mgr-pill-sub">From category breakdown</div>
+              <div class="mgr-pill-sub">Current year to date</div>
             </div>
             <div class="mgr-pill mgr-pill-runrate">
               <div class="mgr-pill-label">Run Rate</div>
@@ -423,7 +460,7 @@ function renderCA(cust, catData, mtd, orders) {
             </div>
             <div class="mgr-pill">
               <div class="mgr-pill-label">Last Order Date</div>
-              <div class="mgr-pill-value" style="font-size:18px">
+              <div class="mgr-pill-value">
                 <span class="kpi-info-wrap">
                   ${lastDate || '—'}
                   <span class="kpi-info-icon">i
@@ -440,28 +477,28 @@ function renderCA(cust, catData, mtd, orders) {
           </div>
 
         </div>
+
+        <!-- Donut: category mix -->
+        <div style="width:230px;flex:none;border-left:1px solid rgba(255,255,255,0.12);margin-left:16px;padding:8px 4px 8px 12px;display:flex;flex-direction:column;justify-content:center">
+          <canvas id="ca-kpi-donut" style="width:100%;height:165px;display:block"></canvas>
+        </div>
+
+        </div><!-- end KPI grid+donut wrapper -->
       </div>
     </div>
 
-    <!-- Category: table left, charts right — grid drives shared height -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch;margin-bottom:12px">
+    <!-- Category: table left, drill-down right — left sizes to content, right matches via JS -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;margin-bottom:12px">
 
-      <!-- Left: category table (no margin-bottom — grid owns the spacing) -->
+      <!-- Left: category table -->
       <div id="ca-cat-section" style="display:flex;flex-direction:column;min-height:0">
         ${buildCatTable(catData)}
       </div>
 
-      <!-- Right: single card container matching left, charts fill it via flex -->
-      <div id="ca-cat-charts" style="background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);display:flex;flex-direction:column;min-height:0;overflow:hidden">
-        <!-- Donut: flex:1 -->
-        <div style="flex:1;display:flex;flex-direction:column;min-height:0;padding:16px 18px 8px;border-bottom:1px solid #f3f4f6">
-          <div class="chart-title" style="margin-bottom:8px">Category Mix</div>
-          <div style="flex:1;min-height:0;position:relative"><canvas id="ca-donut-chart"></canvas></div>
-        </div>
-        <!-- Bar chart: flex:2 -->
-        <div style="flex:2;display:flex;flex-direction:column;min-height:0;padding:16px 18px 12px">
-          <div class="chart-title" style="margin-bottom:8px">Category % Change vs Prior YTD</div>
-          <div style="flex:1;min-height:0;position:relative"><canvas id="ca-bar-chart"></canvas></div>
+      <!-- Right: persistent drill-down panel -->
+      <div id="ca-drill-panel" style="background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);display:flex;flex-direction:column;overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:center;flex:1;min-height:300px;color:#9ca3af;font-size:14px">
+          Select a category to see item-level detail
         </div>
       </div>
 
@@ -613,74 +650,19 @@ function renderCACharts(catData, orders) {
 
   const top8 = [...catData].sort((a, b) => b.currentYtdAmt - a.currentYtdAmt).slice(0, 8);
 
-  // ── Diverging bar: $ change vs prior YTD ─────────────────────
-  const chgRows = catData
-    .map(c => ({ label: c.description || c.categoryCode, chg: +(c.currentYtdAmt - c.priorYtdAmt).toFixed(2) }))
-    .filter(c => c.chg !== 0)
-    .sort((a, b) => a.chg - b.chg); // most negative at top, most positive at bottom
-
-  const barCtx = document.getElementById('ca-bar-chart');
-  if (barCtx && chgRows.length) {
-    const absMax = Math.max(...chgRows.map(c => Math.abs(c.chg)));
-    const axisMax = absMax * 1.35; // extra room for data labels
-    caCharts.bar = new Chart(barCtx.getContext('2d'), {
-      type: 'bar',
-      data: {
-        labels: chgRows.map(c => c.label.length > 18 ? c.label.slice(0, 18) + '…' : c.label),
-        datasets: [{
-          data:            chgRows.map(c => c.chg),
-          backgroundColor: chgRows.map(c => c.chg >= 0 ? 'rgba(22,163,74,0.75)' : 'rgba(220,38,38,0.75)'),
-          borderColor:     chgRows.map(c => c.chg >= 0 ? '#16a34a' : '#dc2626'),
-          borderWidth: 1,
-          borderRadius: 3,
-        }]
-      },
-      options: {
-        indexAxis: 'y',
-        responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { ...tooltip, callbacks: { label: ctx => ` ${ctx.parsed.x >= 0 ? '+' : ''}${fmt$(ctx.parsed.x)} vs prior YTD` } },
-          chgLabels: {
-            id: 'chgLabels',
-            afterDatasetsDraw(chart) {
-              const { ctx, data, scales: { x, y } } = chart;
-              ctx.save();
-              data.datasets[0].data.forEach((val, i) => {
-                const meta = chart.getDatasetMeta(0).data[i];
-                const isPos = val >= 0;
-                const label = (isPos ? '+' : '') + fmt$(val);
-                ctx.font = '600 10px system-ui,sans-serif';
-                ctx.fillStyle = isPos ? '#16a34a' : '#dc2626';
-                ctx.textBaseline = 'middle';
-                ctx.textAlign = isPos ? 'left' : 'right';
-                const xPx = x.getPixelForValue(val);
-                ctx.fillText(label, isPos ? xPx + 4 : xPx - 4, meta.y);
-              });
-              ctx.restore();
-            }
-          }
-        },
-        scales: {
-          x: {
-            min: -axisMax, max: axisMax,
-            ticks: { font: { size: 11 }, color: '#6b7280', callback: v => fmtRevMM(v) },
-            grid:  { color: ctx => ctx.tick.value === 0 ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.04)', lineWidth: ctx => ctx.tick.value === 0 ? 1.5 : 1 }
-          },
-          y: { ticks: { font: { size: 11 }, color: '#374151' }, grid: { display: false } }
-        }
-      }
-    });
-  }
-
-  // ── Donut: category mix ───────────────────────────────────────
-  const donutCtx = document.getElementById('ca-donut-chart');
+  // ── Donut: category mix (compact KPI header panel) ───────────
+  const donutCtx = document.getElementById('ca-kpi-donut');
   if (donutCtx && top8.length) {
-    const PIE_COLORS = ['#3d5a80','#e07b39','#4caf7d','#e8c53a','#9b59b6','#e74c3c','#17a2b8','#f06292'];
+    const PIE_COLORS = ['#f59e0b','#e07b39','#4caf7d','#e8c53a','#9b59b6','#e74c3c','#17a2b8','#f06292'];
     const allTotal   = catData.reduce((s, c) => s + c.currentYtdAmt, 0);
     const top7       = top8.slice(0, 7);
     const other      = catData.slice(7).reduce((s, c) => s + c.currentYtdAmt, 0);
-    const labels     = top7.map(c => c.description || c.categoryCode);
+    const LABEL_MAP = { 'KGS CHANGEMAKER': 'Changemaker', 'KGS CHANGEMAKERS': 'Changemaker', 'KELCHNGMKR': 'Changemaker', 'SEASONAL': 'Seasonal', 'KGS SEASONAL': 'Seasonal' };
+    const labels     = top7.map(c => {
+      const raw = (c.description || c.categoryCode).trim();
+      const s   = LABEL_MAP[raw.toUpperCase()] || raw.replace(/^KGS\s+/i, '');
+      return s.length > 13 ? s.slice(0, 12) + '…' : s;
+    });
     const data       = top7.map(c => c.currentYtdAmt);
     if (other > 0) { labels.push('Other'); data.push(other); }
 
@@ -691,9 +673,9 @@ function renderCACharts(catData, orders) {
         datasets: [{ data, backgroundColor: labels.map((_, i) => PIE_COLORS[i % PIE_COLORS.length]), borderColor: '#fff', borderWidth: 2 }]
       },
       options: {
-        responsive: true, maintainAspectRatio: false, cutout: '55%',
+        responsive: true, maintainAspectRatio: false, cutout: '52%', layout: { padding: 0 },
         plugins: {
-          legend: { display: true, position: 'right', labels: { font: { size: 13, weight: '500' }, color: '#111827', boxWidth: 14, boxHeight: 14, padding: 12 } },
+          legend: { display: true, position: 'right', labels: { font: { size: 10 }, color: 'rgba(255,255,255,0.85)', boxWidth: 10, boxHeight: 10, padding: 5 } },
           tooltip: {
             ...tooltip,
             callbacks: {
@@ -817,7 +799,8 @@ function buildCatTable(catData) {
     const dBg       = c.dollarChange >= 0 ? 'rgba(22,163,74,0.10)' : 'rgba(220,38,38,0.10)';
     const dCl       = c.dollarChange >= 0 ? '#059669' : '#dc2626';
     const catLabel  = c.description || c.categoryCode;
-    return `<tr>
+    const isSelected = caDrill && caDrill.category === c.categoryCode;
+    return `<tr data-category="${c.categoryCode}" style="${isSelected ? 'border-left:3px solid #0d9488;background:#f0fdfa' : 'border-left:3px solid transparent'}">
       <td class="cat-name-cell" style="width:140px;max-width:140px">
         <a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}','best')" title="View best selling items">${catLabel}</a>
       </td>
@@ -977,17 +960,22 @@ function printCatTable() {
 
 // ── Item drill-down ───────────────────────────────────────────
 
-async function openCategoryDrill(custNo, category, defaultTab = 'best') {
+function updateCatRowHighlight(selectedCategory) {
+  document.querySelectorAll('#ca-cat-table tbody tr[data-category]').forEach(row => {
+    const sel = row.dataset.category === selectedCategory;
+    row.style.borderLeft = sel ? '3px solid #0d9488' : '3px solid transparent';
+    row.style.background = sel ? '#f0fdfa' : '';
+  });
+}
+
+async function openCategoryDrill(custNo, category, defaultTab = 'ytd') {
   caDrill     = { category, tab: defaultTab };
   caDrillSort = { col: defaultTab === 'ytd' ? 'current_qty' : 'rank', dir: defaultTab === 'ytd' ? 'desc' : 'asc' };
-  const sec = document.getElementById('ca-cat-charts');
+  const sec = document.getElementById('ca-drill-panel');
   if (!sec) return;
 
-  // Capture left column height NOW — before any DOM changes — so we have
-  // Destroy the chart canvases so Chart.js doesn't leak
-  if (caCharts['ca-bar-chart'])   { caCharts['ca-bar-chart'].destroy();   delete caCharts['ca-bar-chart']; }
-  if (caCharts['ca-donut-chart']) { caCharts['ca-donut-chart'].destroy(); delete caCharts['ca-donut-chart']; }
-  sec.innerHTML = `<div style="padding:20px;color:#6b7280">Loading items for <strong>${category}</strong>…</div>`;
+  updateCatRowHighlight(category);
+  sec.innerHTML = `<div style="padding:20px;color:#6b7280;display:flex;align-items:center;justify-content:center;flex:1">Loading items for <strong style="margin-left:5px">${category}</strong>…</div>`;
 
   const enc = encodeURIComponent(custNo);
   const cat = encodeURIComponent(category);
@@ -1007,7 +995,7 @@ async function openCategoryDrill(custNo, category, defaultTab = 'best') {
 }
 
 function renderItemDrill() {
-  const sec = document.getElementById('ca-cat-charts');
+  const sec = document.getElementById('ca-drill-panel');
   if (!sec || !caDrill) return;
   const { category, tab, ytdItems = [], topItems = [] } = caDrill;
 
@@ -1116,41 +1104,23 @@ function renderItemDrill() {
     </table>`;
   }
 
-  sec.style.cssText = 'background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);display:flex;flex-direction:column;min-height:0;overflow:hidden';
   const tabLabel = tab === 'best' ? `Best Selling Items (${topItems.length})` : `YTD Purchased (${ytdItems.length})`;
-  const hintText = tab === 'best'
-    ? 'highlighted rows = not buying · green/red = recency'
-    : 'Click item # to view on kellisgifts.com';
+  const otherTabLabel = tab === 'best' ? `YTD Purchased (${ytdItems.length})` : `Best Sellers (${topItems.length})`;
+  const otherTab = tab === 'best' ? 'ytd' : 'best';
+  const hintText = 'Click item # to view on kellisgifts.com';
   sec.innerHTML = `
     <div class="card" style="padding:0;flex:1;display:flex;flex-direction:column;overflow:hidden">
-      <div style="padding:12px 16px 10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid #f3f4f6;flex-shrink:0">
-        <a class="cat-back-link" onclick="closeCategoryDrill()">← Categories</a>
-        <span style="color:#9ca3af">/</span>
-        <span style="font-weight:600;color:#1a2332">${category}</span>
-        <span style="background:#f1f5f9;color:#3d5a80;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">${tabLabel}</span>
-        <span style="color:#9ca3af;font-size:11px">${hintText}</span>
+      <div style="padding:10px 14px 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-bottom:1px solid #f3f4f6;flex-shrink:0">
+        <span style="font-weight:700;color:#1a2332;font-size:13px">${category}</span>
+        <span style="color:#9ca3af;font-size:12px">·</span>
+        <span style="background:#e0f2fe;color:#0369a1;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">${tabLabel}</span>
+        <a onclick="caDrillSwapTab('${otherTab}')" style="background:#f1f5f9;color:#6b7280;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;cursor:pointer">${otherTabLabel}</a>
+        <span style="color:#9ca3af;font-size:11px;margin-left:auto">${hintText}</span>
       </div>
       <div class="inv-wrap" style="flex:1;overflow-y:auto">${tableHTML}</div>
     </div>`;
 
-  // Left panel drives height: constrain right panel to match left's natural height.
-  // Switch grid to align-items:start so right panel doesn't auto-stretch past its set height.
-  if (caDrillResizeHandler) { window.removeEventListener('resize', caDrillResizeHandler); caDrillResizeHandler = null; }
-  requestAnimationFrame(() => {
-    const left  = document.getElementById('ca-cat-section');
-    const right = sec;
-    const grid  = right && right.parentElement;
-    if (!left || !right || !grid) return;
-    const syncHeight = () => {
-      const h = left.getBoundingClientRect().height;
-      right.style.height = h + 'px';
-    };
-    grid.style.alignItems = 'start';
-    syncHeight();
-    caDrillResizeHandler = syncHeight;
-    window.addEventListener('resize', caDrillResizeHandler);
-  });
-
+  updateCatRowHighlight(category);
 }
 
 function caDrillSortBy(col) {
@@ -1159,32 +1129,18 @@ function caDrillSortBy(col) {
   renderItemDrill();
 }
 
-function closeCategoryDrill() {
-  caDrill = null;
-  if (caDrillResizeHandler) { window.removeEventListener('resize', caDrillResizeHandler); caDrillResizeHandler = null; }
-  const charts = document.getElementById('ca-cat-charts');
-  if (charts) {
-    const grid = charts.parentElement;
-    if (grid) grid.style.alignItems = 'stretch';
-    // Clear explicit height set during drill-down before restoring cssText
-    charts.style.height = '';
-    charts.style.cssText = 'background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);display:flex;flex-direction:column;min-height:0;overflow:hidden';
-    charts.innerHTML = `
-      <div style="flex:1;display:flex;flex-direction:column;min-height:0;padding:16px 18px 8px;border-bottom:1px solid #f3f4f6">
-        <div class="chart-title" style="margin-bottom:8px">Category Mix</div>
-        <div style="flex:1;min-height:0;position:relative"><canvas id="ca-donut-chart"></canvas></div>
-      </div>
-      <div style="flex:2;display:flex;flex-direction:column;min-height:0;padding:16px 18px 12px">
-        <div class="chart-title" style="margin-bottom:8px">Category % Change vs Prior YTD</div>
-        <div style="flex:1;min-height:0;position:relative"><canvas id="ca-bar-chart"></canvas></div>
-      </div>`;
-    setTimeout(() => renderCACharts(window.caLastCatData || [], window.caLastOrders || []), 0);
-  }
+function caDrillSwapTab(newTab) {
+  if (!caDrill) return;
+  caDrill.tab = newTab;
+  caDrillSort = { col: newTab === 'ytd' ? 'current_qty' : 'rank', dir: newTab === 'ytd' ? 'desc' : 'asc' };
+  renderItemDrill();
 }
+
+function closeCategoryDrill() {} // no-op — drill panel is always visible
 
 // ── AI Chat ───────────────────────────────────────────────────
 
-function startAIConversation(cust, catData, mtd) {
+async function startAIConversation(cust, catData, mtd) {
   if (caAiCtrl) { caAiCtrl.abort(); caAiCtrl = null; }
   caConversation = [];
   const msgs = document.getElementById('ca-ai-messages');
@@ -1194,7 +1150,39 @@ function startAIConversation(cust, catData, mtd) {
   if (opts) { opts.innerHTML = ''; opts.style.display = 'none'; }
   if (inp)  inp.value = '';
 
-  const context = buildPromptContext(cust, catData, mtd);
+  const orders  = window.caLastOrders || [];
+  const custNo  = cust.custNo || caCustNo;
+  let itemData  = { topItems: {}, missedItems: [] };
+
+  const topCatCodes = [...(catData || [])]
+    .filter(c => c.currentYtdAmt > 0)
+    .sort((a, b) => b.currentYtdAmt - a.currentYtdAmt)
+    .slice(0, 3).map(c => c.categoryCode);
+
+  if (topCatCodes.length && custNo) {
+    try {
+      const enc     = encodeURIComponent(custNo);
+      const results = await Promise.all(
+        topCatCodes.map(cat =>
+          fetch(`/proxy/ytd-items/${enc}/${encodeURIComponent(cat)}`)
+            .then(r => r.ok ? r.json() : []).catch(() => [])
+        )
+      );
+      for (let i = 0; i < topCatCodes.length; i++) {
+        const cat   = topCatCodes[i];
+        const items = results[i] || [];
+        itemData.topItems[cat] = items.filter(it => it.current_qty > 0).slice(0, 5);
+        const missed = items
+          .filter(it => it.current_qty === 0 && it.prior_qty > 0)
+          .map(it => ({ itemNo: it.itemNo, description: it.description, category: cat, qty_full_prior_year: it.prior_qty, last_bought_date: it.last_sold || null }));
+        itemData.missedItems.push(...missed);
+      }
+      itemData.missedItems.sort((a, b) => b.qty_full_prior_year - a.qty_full_prior_year);
+      itemData.missedItems = itemData.missedItems.slice(0, 10);
+    } catch (_) {}
+  }
+
+  const context = buildPromptContext(cust, catData, mtd, orders, itemData);
   caConversation.push({ role: 'user', content: context });
   caStreamResponse();
 }
@@ -1475,11 +1463,13 @@ async function openProductListModal(custNo, custName) {
 
   try {
     // Use already-loaded category data — avoids a round-trip and history scan
+    const DEFAULT_CATS = 'CANDY,BALLOONS,GIFTS,PLUSH,TOYS';
     const topCats = (window.caLastCatData || [])
+      .filter(c => c.categoryCode)
       .sort((a, b) => b.currentYtdAmt - a.currentYtdAmt)
       .slice(0, 5)
       .map(c => c.categoryCode)
-      .join(',');
+      .join(',') || DEFAULT_CATS;
 
     const resp  = await fetch(`/proxy/recommended-items?categories=${encodeURIComponent(topCats)}`);
     const items = resp.ok ? await resp.json() : [];
@@ -1490,18 +1480,28 @@ async function openProductListModal(custNo, custName) {
     }
 
     // Build table
+    const th = (label, align = 'left') =>
+      `<th style="padding:9px 12px;text-align:${align};font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.04em;white-space:nowrap">${label}</th>`;
     const rows = items.map((item, i) => {
-      const slug = toKellisSlug(item.description);
-      const url  = `https://www.kellisgifts.com/${slug}/`;
+      const slug  = toKellisSlug(item.description);
+      const url   = `https://www.kellisgifts.com/${slug}/`;
       const cost = item.caseCost > 0 ? `$${item.caseCost.toFixed(2)}` : '—';
-      const pack = item.packSize > 0 ? item.packSize : '—';
-      return `<tr style="${i % 2 === 0 ? '' : 'background:#f8f9fb'}">
+      // Resolve quantity: raw prefUnitNumer → parsed from description (e.g. "160CT") → nothing
+      const qty = item.unitQty > 1
+        ? item.unitQty
+        : (() => { const m = (item.description || '').match(/\b(\d+)\s*(?:CT|PC|PCS|CNT|COUNT)\b/i); return m ? parseInt(m[1]) : 0; })();
+      const unitStr = item.unit
+        ? (qty > 1 ? `${item.unit}${qty}` : item.unit)
+        : (qty > 1 ? `×${qty}` : '—');
+      const bg = i % 2 === 0 ? '' : 'background:#f8f9fb';
+      return `<tr style="${bg}">
+        <td style="padding:9px 12px;font-family:monospace;font-size:12px;color:#6b7280;white-space:nowrap">${item.itemNo}</td>
         <td style="padding:9px 12px;font-size:13px;color:#374151;font-weight:500">
           <a href="${url}" target="_blank" style="color:#0d9488;text-decoration:none;font-weight:600" title="View on Kellis">${item.description}</a>
         </td>
         <td style="padding:9px 12px;font-family:monospace;font-size:12px;color:#6b7280">${item.upc || '—'}</td>
         <td style="padding:9px 12px;font-size:13px;text-align:right;font-weight:600;color:#1a2332">${cost}</td>
-        <td style="padding:9px 12px;font-size:13px;text-align:center;color:#6b7280">${pack}</td>
+        <td style="padding:9px 12px;font-size:13px;text-align:center;color:#6b7280;white-space:nowrap">${unitStr}</td>
       </tr>`;
     }).join('');
 
@@ -1509,10 +1509,11 @@ async function openProductListModal(custNo, custName) {
       <table style="width:100%;border-collapse:collapse;font-family:inherit">
         <thead>
           <tr style="background:#f1f5f9;border-bottom:2px solid #e5e7eb">
-            <th style="padding:9px 12px;text-align:left;font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.04em">Item Name</th>
-            <th style="padding:9px 12px;text-align:left;font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.04em">UPC</th>
-            <th style="padding:9px 12px;text-align:right;font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.04em">Case Cost</th>
-            <th style="padding:9px 12px;text-align:center;font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.04em">Pack Size</th>
+            ${th('Item #')}
+            ${th('Item Name')}
+            ${th('UPC')}
+            ${th('Cost', 'right')}
+            ${th('Unit', 'center')}
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -1522,9 +1523,12 @@ async function openProductListModal(custNo, custName) {
     const emailLines = items.map((item, i) => {
       const slug = toKellisSlug(item.description);
       const url  = `https://www.kellisgifts.com/${slug}/`;
-      const cost = item.caseCost > 0 ? `$${item.caseCost.toFixed(2)}` : 'N/A';
-      const pack = item.packSize > 0 ? item.packSize : 'N/A';
-      return `${i + 1}. ${item.description}\n   ${url}\n   UPC: ${item.upc || 'N/A'} | Case Cost: ${cost} | Pack Size: ${pack}`;
+      const cost2 = item.caseCost > 0 ? `$${item.caseCost.toFixed(2)}` : 'N/A';
+      const qty2  = item.unitQty > 1
+        ? item.unitQty
+        : (() => { const m = (item.description || '').match(/\b(\d+)\s*(?:CT|PC|PCS|CNT|COUNT)\b/i); return m ? parseInt(m[1]) : 0; })();
+      const unitStr2 = item.unit ? (qty2 > 1 ? `${item.unit}${qty2}` : item.unit) : (qty2 > 1 ? `×${qty2}` : 'N/A');
+      return `${i + 1}. [${item.itemNo}] ${item.description}\n   ${url}\n   UPC: ${item.upc || 'N/A'} | Cost: ${cost2} | Unit: ${unitStr2}`;
     }).join('\n\n');
 
     const subject = `Recommended Products — ${custName}`;

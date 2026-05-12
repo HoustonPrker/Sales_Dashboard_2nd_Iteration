@@ -222,10 +222,11 @@ async function fetchCategoryItems(cat) {
   const cached = itemCatCache[cat];
   if (cached && Date.now() - cached.ts < ITEM_CACHE_TTL) return cached.data;
 
-  // Single page fetch — no pagination needed, we only want a sample of items per category
   const r    = await doFetch('GET', `/api/v1/Items?filter=categoryCode:eq:${encodeURIComponent(cat)}&pageSize=50&page=1`);
   const body = r.ok ? await r.json() : {};
   const rows = Array.isArray(body) ? body : (body.data || []);
+
+  if (rows.length) console.log(`[recommended-items] ${cat} sample keys:`, Object.keys(rows[0]));
 
   itemCatCache[cat] = { data: rows, ts: Date.now() };
   return rows;
@@ -237,6 +238,7 @@ router.get('/recommended-items', async (req, res) => {
     const categories = (req.query.categories || '')
       .split(',').map(s => s.trim()).filter(Boolean).slice(0, 5);
 
+    console.log(`[recommended-items] categories=${JSON.stringify(categories)}`);
     if (!categories.length) return res.json([]);
 
     const itemSets = await Promise.all(categories.map(cat => fetchCategoryItems(cat).catch(() => [])));
@@ -256,9 +258,10 @@ router.get('/recommended-items', async (req, res) => {
           result.push({
             itemNo:      item.itemNo,
             description: item.description || item.itemNo,
-            upc:         item.upcCode  || item.upc      || item.upc1      || item.primaryUpc || '',
-            caseCost:    parseFloat(item.cost || item.unitCost || item.avgCost || item.lastCost || 0),
-            packSize:    parseInt(item.qtyPerCase || item.sellMult || item.caseQty || item.packSize || 0),
+            upc:         item.barcode || item.barcod3Of9 || '',
+            caseCost:    parseFloat(item.lastCost || 0),
+            unitQty:     item.prefUnitNumer > 0 ? item.prefUnitNumer : 0,
+            unit:        item.prefUnitNam || item.prefUnit || item.stockingUnit || '',
           });
           if (result.length >= 15) break;
         }

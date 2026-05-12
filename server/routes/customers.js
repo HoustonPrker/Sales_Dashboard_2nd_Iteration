@@ -11,10 +11,19 @@ const express      = require('express');
 const router       = express.Router();
 const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP, MONTHLY_GROWTH_GOAL_PCT, pyMonthGlobalCache } = require('../lib/api');
 const categoryCache = require('../lib/category-cache');
+const { getActiveReps, isActiveRep } = require('../data/active-reps');
+const { classifyAccountHealth, computeTypicalInterval } = require('../utils/health-classification');
 
 // ── In-memory cache keyed by rep (5-minute TTL) ───────────────
 const accountsCache = {};  // { [rep]: { data, ts } }
 const CACHE_TTL     = 5 * 60 * 1000;
+
+// Global ticket caches — keyed by date range, shared across all reps.
+// Tickets carry the historical salesRep at write time, not current account owner,
+// so we must NOT filter by rep; scope to current accounts via custNo join instead.
+const cyYtdGlobalCache   = {};  // keyed by 'YYYY-MM-DD:YYYY-MM-DD' (ytdStart:today)
+const pyYtdGlobalCache   = {};  // keyed by 'YYYY-MM-DD:YYYY-MM-DD' (pyStart:pyEnd)
+const pyFullYearCache    = {};  // keyed by prior year (e.g. '2024') — full Jan–Dec, long TTL
 
 // ── Per-customer caches (5-minute TTL) ───────────────────────
 const custDetailCache = {};  // { [custNo]: { data, ts } }
@@ -71,49 +80,43 @@ function computeTier(pctToTarget, daysSince, ytdSales, priorYtd) {
   return 'AtRisk';
 }
 
-// ── GET /proxy/reps — list of unique sales reps ───────────────
-// List Kellis sales reps.
-// Each rep has 4 user records: REPID, REPID-ACT, REPID-INA, REPID-NEW.
-// Customer.salesRep stores the usrId directly (e.g. "BRIANH-ACT").
-// We show only the -ACT variants so the picker maps 1:1 to active customer accounts.
+// ── GET /proxy/sales-reps/active — authoritative active rep list ──
+// Single source of truth for "who is a current sales rep".
+// Returns [{id}] — callers resolve display names from NCR or show the id.
+// Future: wraps a DB query to dbo.CK_SALES_REPS; shape stays the same.
+router.get('/sales-reps/active', async (req, res) => {
+  try {
+    const reps = await getActiveReps();
+    res.json(reps);
+  } catch (e) {
+    console.error('/proxy/sales-reps/active error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /proxy/reps — rep picker list (id + display name) ────────
+// Uses the active-reps registry, then resolves display names from NCR
+// in one batch call so the picker can show human-readable names.
 router.get('/reps', async (req, res) => {
   try {
-    // Step 1: get all active KGS users
+    const activeReps = await getActiveReps(); // [{id}]
+
+    // Resolve display names from NCR in a single call, then join
     const usersRes = await doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS&fields=usrId,name&pageSize=500`);
-    const body = usersRes.ok ? await usersRes.json() : {};
-    const rows = body.data || (Array.isArray(body) ? body : []);
-    const activeUsers = rows
-      .filter(u => {
-        const id = (u.usrId || '').toUpperCase();
-        return id.endsWith('-ACT') || id.endsWith('-ACTIVE');
-      })
-      .map(u => ({
-        id:   (u.usrId || '').trim(),
-        name: (u.name  || u.usrId || '').trim()
-                .replace(/\s*[-–]\s*(ACTIVE|ACT)$/i, '').trim(),
-      }));
+    const body     = usersRes.ok ? await usersRes.json() : {};
+    const nameMap  = {};
+    (body.data || []).forEach(u => {
+      nameMap[(u.usrId || '').trim().toUpperCase()] = (u.name || '').trim();
+    });
 
-    // Step 2: check each user for at least 1 customer (all in parallel, pageSize=1)
-    // Try both the full ID (CGONZ-ACT) and the base ID (CGONZ) since customer
-    // records may store either format.
-    const checked = await Promise.all(
-      activeUsers.map(async u => {
-        const baseId = u.id.replace(/-ACTIVE$|-ACT$/i, '');
-        for (const repId of [u.id, baseId]) {
-          try {
-            const r = await doFetch('GET',
-              `/api/v1/Customers?filter=salesRep:eq:${encodeURIComponent(repId)}&fields=custNo&pageSize=1`);
-            if (!r.ok) continue;
-            const b = await r.json();
-            const items = b.data ?? (Array.isArray(b) ? b : b.Items ?? b.items ?? []);
-            if (items.length > 0) return u;
-          } catch (_) {}
-        }
-        return null;
+    const reps = activeReps
+      .map(({ id }) => {
+        const raw  = nameMap[id.toUpperCase()] || id;
+        const name = raw.replace(/\s*[-–]\s*(ACTIVE|ACT)$/i, '').trim();
+        return { id, name: name || id };
       })
-    );
+      .sort((a, b) => a.name.localeCompare(b.name));
 
-    const reps = checked.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
     res.json(reps);
   } catch (e) {
     console.error('/proxy/reps error:', e.message);
@@ -178,32 +181,75 @@ router.get('/accounts', async (req, res) => {
     // Last day of the full prior-year same month (not today's day last year)
     const pyMonthEnd     = new Date(yr - 1, parseInt(mm, 10), 0).toISOString().slice(0, 10);
     const pyMonthCacheKey = `${yr - 1}-${mm}`;
+    const cyYtdCacheKey   = `${ytdStart}:${today}`;
+    const pyYtdCacheKey   = `${pyStart}:${pyEnd}`;
 
-    // pyMonthTickets: fetch WITHOUT SalesRep filter — tickets carry the historical rep
-    // at order time, not the current account owner, so a SalesRep filter silently drops
-    // accounts that transferred between reps. Scope to the current rep via custNo join below.
+    // All three ticket fetches drop the SalesRep filter — historical tickets carry the rep
+    // at write time, not the current account owner, so a rep filter silently drops
+    // transferred accounts. Scope to current rep via custNo join against customer list below.
     const pyMonthTicketsPromise = (pyMonthGlobalCache[pyMonthCacheKey] && Date.now() - pyMonthGlobalCache[pyMonthCacheKey].ts < CACHE_TTL)
       ? Promise.resolve(pyMonthGlobalCache[pyMonthCacheKey].data)
       : fetchAllPagesPar(
           `/api/v1/pos/ticket-history?filter=BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=CustNo,Total&pageSize=500`
         ).then(data => { pyMonthGlobalCache[pyMonthCacheKey] = { data, ts: Date.now() }; return data; });
 
+    const cyTicketsPromise = (cyYtdGlobalCache[cyYtdCacheKey] && Date.now() - cyYtdGlobalCache[cyYtdCacheKey].ts < CACHE_TTL)
+      ? Promise.resolve(cyYtdGlobalCache[cyYtdCacheKey].data)
+      : fetchAllPagesPar(
+          `/api/v1/pos/ticket-history?filter=BusinessDate:gte:${ytdStart},BusinessDate:lte:${today}&fields=CustNo,Total,BusinessDate&pageSize=500`
+        ).then(data => { cyYtdGlobalCache[cyYtdCacheKey] = { data, ts: Date.now() }; return data; });
+
+    const pyTicketsPromise = (pyYtdGlobalCache[pyYtdCacheKey] && Date.now() - pyYtdGlobalCache[pyYtdCacheKey].ts < CACHE_TTL)
+      ? Promise.resolve(pyYtdGlobalCache[pyYtdCacheKey].data)
+      : fetchAllPagesPar(
+          `/api/v1/pos/ticket-history?filter=BusinessDate:gte:${pyStart},BusinessDate:lte:${pyEnd}&fields=CustNo,Total&pageSize=500`
+        ).then(data => { pyYtdGlobalCache[pyYtdCacheKey] = { data, ts: Date.now() }; return data; });
+
+    // Full prior calendar year — for annual target (Signal 3) and order-date history (Signal 1)
+    const pyFullStart    = `${yr - 1}-01-01`;
+    const pyFullEnd      = `${yr - 1}-12-31`;
+    const pyFullCacheKey = String(yr - 1);
+    const PY_FULL_TTL    = 60 * 60 * 1000; // 1-hour TTL (historical data rarely changes)
+    const pyFullPromise  = (pyFullYearCache[pyFullCacheKey] && Date.now() - pyFullYearCache[pyFullCacheKey].ts < PY_FULL_TTL)
+      ? Promise.resolve(pyFullYearCache[pyFullCacheKey].data)
+      : fetchAllPagesPar(
+          `/api/v1/pos/ticket-history?filter=BusinessDate:gte:${pyFullStart},BusinessDate:lte:${pyFullEnd}&fields=CustNo,Total,BusinessDate&pageSize=500`
+        ).then(data => { pyFullYearCache[pyFullCacheKey] = { data, ts: Date.now() }; return data; });
+
     const t1 = Date.now();
-    const [customers, cyTickets, pyTickets, pyMonthTickets] = await Promise.all([
+    const [customers, cyTickets, pyTickets, pyMonthTickets, pyFullTickets] = await Promise.all([
       fetchAllPages(
         `/api/v1/Customers?${repFilter}fields=custNo,name,state,salesRep,lastSaleDate&pageSize=200`
       ),
-      // All CY YTD tickets for this rep — aggregate by custNo
-      fetchAllPages(
-        `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${ytdStart},BusinessDate:lte:${today}&fields=CustNo,Total&pageSize=500`
-      ),
-      // All PY same-period tickets for this rep — aggregate by custNo
-      fetchAllPages(
-        `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${pyStart},BusinessDate:lte:${pyEnd}&fields=CustNo,Total&pageSize=500`
-      ),
+      cyTicketsPromise,
+      pyTicketsPromise,
       pyMonthTicketsPromise,
+      pyFullPromise,
     ]);
     console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY / ${pyMonthTickets.length} pyMonth tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
+
+    // Fetch YTD line items per customer to compute best-seller % (unit-based).
+    // bestSeller set is profCod1=Y items; cached 30 min.
+    const [bsSet] = await Promise.all([getBestSellerSet()]);
+    const bsPctData = {};
+    await parallelLimit(customers.map(c => async () => {
+      try {
+        const enc   = encodeURIComponent(c.custNo);
+        const items = await fetchAllPagesPar(
+          `/api/v1/Customers/${enc}/line-items?filter=businessDate:gte:${ytdStart},businessDate:lte:${today}&compact=true&fields=itemNo,quantity&pageSize=500`
+        );
+        let bsUnits = 0, totalUnits = 0;
+        for (const l of items) {
+          const qty = parseFloat(l.quantity || l.qty || 1);
+          totalUnits += qty;
+          if (bsSet.has((l.itemNo || '').trim().toUpperCase())) bsUnits += qty;
+        }
+        bsPctData[c.custNo] = { bsUnits, totalUnits };
+      } catch (_) {
+        bsPctData[c.custNo] = { bsUnits: 0, totalUnits: 0 };
+      }
+    }), 20);
+    console.log(`  bsPct fetch done for ${customers.length} customers`);
 
     if (!customers.length) {
       accountsCache[cacheKey] = { data: [], ts: Date.now() };
@@ -228,7 +274,35 @@ router.get('/accounts', async (req, res) => {
       if (c) salesMap[c].monthGoal += parseFloat(t.Total || t.total || 0);
     }
 
-    // 3. Build account records
+    // 3. Build pyFull totals + per-customer order-date pool for health signals
+    const pyFullMap  = {}; // custNo → full prior year total
+    const dateMap    = {}; // custNo → Set of date strings (cy + pyFull combined)
+
+    for (const t of pyFullTickets) {
+      const c = (t.CustNo || t.custNo || '').trim();
+      if (!c) continue;
+      pyFullMap[c] = (pyFullMap[c] || 0) + parseFloat(t.Total || t.total || 0);
+      const d = (t.BusinessDate || t.businessDate || '').slice(0, 10);
+      if (d) { if (!dateMap[c]) dateMap[c] = new Set(); dateMap[c].add(d); }
+    }
+    for (const t of cyTickets) {
+      const c = (t.CustNo || t.custNo || '').trim();
+      if (!c) continue;
+      const d = (t.BusinessDate || t.businessDate || '').slice(0, 10);
+      if (d) { if (!dateMap[c]) dateMap[c] = new Set(); dateMap[c].add(d); }
+    }
+
+    // Precompute typicalIntervalDays for every customer
+    const intervalMap = {};
+    for (const [custNo, dateSet] of Object.entries(dateMap)) {
+      intervalMap[custNo] = computeTypicalInterval([...dateSet]);
+    }
+
+    // Run-rate: fraction of calendar year elapsed
+    const dayOfYr  = Math.floor((now - new Date(yr, 0, 1)) / 86400000) + 1;
+    const runRate  = dayOfYr / 365;
+
+    // 4. Build account records
     const accounts = customers.map(c => {
       const s        = salesMap[c.custNo] || { ytd: 0, prior: 0, monthGoal: 0 };
       const ytdSales = s.ytd;
@@ -244,6 +318,19 @@ router.get('/accounts', async (req, res) => {
 
       const tier = computeTier(pctToTarget, daysSince, ytdSales, priorYtd);
 
+      const pyFullYear        = +(pyFullMap[c.custNo] || 0).toFixed(2);
+      const typicalIntervalDays = intervalMap[c.custNo] ?? null;
+      const healthSignals     = classifyAccountHealth({
+        daysSinceOrder: daysSince,
+        typicalIntervalDays,
+        ytdSales,
+        priorYtd,
+        pyFullYear,
+        runRate,
+      });
+
+      const bs = bsPctData[c.custNo] || { bsUnits: 0, totalUnits: 0 };
+
       return {
         custNo:         c.custNo,
         name:           c.name || '',
@@ -256,7 +343,13 @@ router.get('/accounts', async (req, res) => {
         pctToTarget:    +pctToTarget.toFixed(4),
         daysSinceOrder: daysSince,
         lastOrderDate:  lastDate,
-        tier,
+        tier,          // current classification (old rules) — pending diagnostic review
+        healthSignals, // new 3-signal classification — use after diagnostic approval
+        typicalIntervalDays,
+        pyFullYear,
+        bsUnits:        +bs.bsUnits.toFixed(0),
+        totalUnits:     +bs.totalUnits.toFixed(0),
+        bsPct:          bs.totalUnits > 0 ? +(bs.bsUnits / bs.totalUnits).toFixed(4) : 0,
       };
     });
 
@@ -268,6 +361,77 @@ router.get('/accounts', async (req, res) => {
     res.json(accounts);
   } catch (e) {
     console.error('/proxy/accounts error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /proxy/accounts/health-diagnostic?rep= ───────────────
+// Compares old tier classification vs new 3-signal classification.
+// Load /proxy/accounts first so the cache is warm, then call this endpoint.
+// Review the output before enabling the new classification in production.
+router.get('/accounts/health-diagnostic', async (req, res) => {
+  try {
+    const rep      = (req.query.rep || SALES_REP || '').trim();
+    const cacheKey = rep || '__all__';
+    if (!accountsCache[cacheKey]) {
+      return res.status(503).json({
+        error: 'Cache is cold. Load /proxy/accounts?rep=<REP> first, then retry this endpoint.',
+      });
+    }
+
+    const accounts = accountsCache[cacheKey].data;
+
+    const TIER_ORDER = { Healthy: 0, Attention: 1, AtRisk: 2, Critical: 3 };
+    const comparison = accounts.map(a => {
+      const oldTier = a.tier;
+      const newTier = a.healthSignals?.tier || 'Unknown';
+      const swing   = TIER_ORDER[newTier] - TIER_ORDER[oldTier];
+      return {
+        custNo:             a.custNo,
+        name:               a.name,
+        oldTier,
+        newTier,
+        swing,              // positive = got worse, negative = improved
+        driverSignal:       a.healthSignals?.driverSignal,
+        signals:            a.healthSignals?.signals,
+        daysSinceOrder:     a.daysSinceOrder,
+        typicalIntervalDays: a.typicalIntervalDays,
+        ytdSales:           a.ytdSales,
+        priorYtd:           a.priorYtd,
+        pyFullYear:         a.pyFullYear,
+      };
+    });
+
+    // Summary stats
+    const tierDist = { old: {}, new: {} };
+    const TIERS = ['Healthy', 'Attention', 'AtRisk', 'Critical'];
+    TIERS.forEach(t => { tierDist.old[t] = 0; tierDist.new[t] = 0; });
+    comparison.forEach(r => {
+      if (tierDist.old[r.oldTier] !== undefined) tierDist.old[r.oldTier]++;
+      if (tierDist.new[r.newTier] !== undefined) tierDist.new[r.newTier]++;
+    });
+
+    const changed      = comparison.filter(r => r.oldTier !== r.newTier);
+    const bigSwings    = comparison.filter(r => Math.abs(r.swing) >= 2); // 2+ tier jumps
+    const noInterval   = comparison.filter(r => r.typicalIntervalDays === null);
+
+    res.json({
+      summary: {
+        total:           comparison.length,
+        unchanged:       comparison.length - changed.length,
+        changed:         changed.length,
+        bigSwings:       bigSwings.length,
+        noTypicalInterval: noInterval.length,
+        tierDistributionOld: tierDist.old,
+        tierDistributionNew: tierDist.new,
+      },
+      changed,
+      bigSwings,
+      noTypicalInterval: noInterval.map(r => ({ custNo: r.custNo, name: r.name, daysSinceOrder: r.daysSinceOrder })),
+      all: comparison,
+    });
+  } catch (e) {
+    console.error('/proxy/accounts/health-diagnostic error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -353,13 +517,13 @@ router.get('/orders/:custNo', async (req, res) => {
     })();
     const today = new Date().toISOString().slice(0, 10);
     const raw = await fetchAllPagesPar(
-      `/api/v1/pos/ticket-history?filter=custNo:eq:${custNo},businessDate:gte:${since},businessDate:lte:${today}&fields=TicketNo,Total,SaleLines,BusinessDate&pageSize=200`
+      `/api/v1/pos/ticket-history?filter=custNo:eq:${custNo},businessDate:gte:${since},businessDate:lte:${today}&fields=TicketNo,Total,SaleSubtotal,SaleLines,BusinessDate&pageSize=200`
     );
     const orders = raw.map(o => ({
-      date:      o.BusinessDate || o.businessDate || '',
-      ticketNo:  o.TicketNo    || o.ticketNo     || '',
-      amount:    parseFloat(o.Total || o.total   || 0),
-      itemCount: o.SaleLines   || o.saleLines    || null,
+      date:      o.BusinessDate  || o.businessDate  || '',
+      ticketNo:  o.TicketNo      || o.ticketNo      || '',
+      amount:    parseFloat(o.SaleSubtotal || o.saleSubtotal || o.Total || o.total || 0),
+      itemCount: o.SaleLines     || o.saleLines     || null,
     }));
     custOrdersCache[key] = { data: orders, ts: Date.now() };
     res.json(orders);
@@ -497,10 +661,10 @@ router.get('/mtd/:custNo', async (req, res) => {
     const mtdEnd   = now.toISOString().slice(0, 10);
 
     const tickets = await fetchAllPages(
-      `/api/v1/pos/ticket-history?filter=custNo:eq:${custNo},businessDate:gte:${mtdStart},businessDate:lte:${mtdEnd}&fields=custNo,total,businessDate&pageSize=200`
+      `/api/v1/pos/ticket-history?filter=custNo:eq:${custNo},businessDate:gte:${mtdStart},businessDate:lte:${mtdEnd}&fields=custNo,total,SaleSubtotal,businessDate&pageSize=200`
     );
 
-    const mtdTotal  = tickets.reduce((s, t) => s + (parseFloat(t.Total || t.total) || 0), 0);
+    const mtdTotal  = tickets.reduce((s, t) => s + (parseFloat(t.SaleSubtotal || t.saleSubtotal || t.Total || t.total) || 0), 0);
     const orderDays = new Set(tickets.map(t => (t.businessDate || '').slice(0, 10))).size;
     const result    = { total: +mtdTotal.toFixed(2), orderDays, orders: tickets.length };
     custMtdCache[key] = { data: result, ts: Date.now() };
@@ -532,102 +696,214 @@ router.get('/leaderboard', async (req, res) => {
   }
 
   try {
-    // 1. Fetch all customers + all active reps in parallel — two calls total
-    const [repsResp, allCustomers] = await Promise.all([
-      doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS,secCod:eq:SALES&fields=usrId,name&pageSize=500`),
+    const now  = new Date();
+    const yr   = now.getFullYear();
+    const mm   = now.getMonth(); // 0-indexed
+    const dd   = String(now.getDate()).padStart(2, '0');
+
+    // ── Date window helpers ───────────────────────────────────
+    const isoMonth = (y, m) => `${y}-${String(m + 1).padStart(2, '0')}`;
+    const monthStart = (y, m) => `${isoMonth(y, m)}-01`;
+    // Last day of a month
+    const monthEnd = (y, m) => new Date(y, m + 1, 0).toISOString().slice(0, 10);
+    const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+    // Current month: Jan 1 of current month → today
+    const cmStart  = monthStart(yr, mm);
+    const cmEnd    = `${yr}-${String(mm + 1).padStart(2, '0')}-${dd}`;
+    // Last completed month
+    const lmY = mm === 0 ? yr - 1 : yr;
+    const lmM = mm === 0 ? 11 : mm - 1;
+    const lmStart  = monthStart(lmY, lmM);
+    const lmEnd    = monthEnd(lmY, lmM);
+    // Prior month (2 months back, for Most Improved)
+    const pmY = lmM === 0 ? lmY - 1 : lmY;
+    const pmM = lmM === 0 ? 11 : lmM - 1;
+    const pmStart  = monthStart(pmY, pmM);
+    const pmEnd    = monthEnd(pmY, pmM);
+    // Prior-year equivalents (for monthly goal = prior year same month × growth factor)
+    const pyCmStart = monthStart(yr - 1, mm);
+    const pyCmEnd   = monthEnd(yr - 1, mm);
+    const pyLmStart = monthStart(lmY - 1, lmM);
+    const pyLmEnd   = monthEnd(lmY - 1, lmM);
+
+    const ticketFetch = (start, end) =>
+      fetchAllPagesPar(`/api/v1/pos/ticket-history?filter=BusinessDate:gte:${start},BusinessDate:lte:${end}&fields=CustNo,Total&pageSize=500`);
+
+    const { ytdStart, ytdEnd, priorStart, priorEnd } = ytdDateRange();
+    const cyKey = `${ytdStart}:${ytdEnd}`;
+    const pyKey = `${priorStart}:${priorEnd}`;
+
+    // 1. All fetches in parallel (ticket caches shared with accounts route where keys match)
+    const [activeReps, allCustomers, cyTickets, pyTickets, cmTickets, lmTickets, pmTickets, pyCmTickets, pyLmTickets] = await Promise.all([
+      getActiveReps(),
       fetchAllPages(`/api/v1/Customers?fields=custNo,salesRep,lastSaleDate&pageSize=200`),
+      cyYtdGlobalCache[cyKey] && Date.now() - cyYtdGlobalCache[cyKey].ts < CACHE_TTL
+        ? Promise.resolve(cyYtdGlobalCache[cyKey].data)
+        : ticketFetch(ytdStart, ytdEnd).then(d => { cyYtdGlobalCache[cyKey] = { data: d, ts: Date.now() }; return d; }),
+      pyYtdGlobalCache[pyKey] && Date.now() - pyYtdGlobalCache[pyKey].ts < CACHE_TTL
+        ? Promise.resolve(pyYtdGlobalCache[pyKey].data)
+        : ticketFetch(priorStart, priorEnd).then(d => { pyYtdGlobalCache[pyKey] = { data: d, ts: Date.now() }; return d; }),
+      ticketFetch(cmStart, cmEnd),     // current month actual
+      ticketFetch(lmStart, lmEnd),     // last completed month actual
+      ticketFetch(pmStart, pmEnd),     // prior month actual (Most Improved denominator)
+      ticketFetch(pyCmStart, pyCmEnd), // prior year current month (goal base)
+      ticketFetch(pyLmStart, pyLmEnd), // prior year last month (goal base)
     ]);
 
-    const repsBody = repsResp.ok ? await repsResp.json() : {};
-    const repMap   = {};
-    (repsBody.data || [])
-      .filter(u => { const id = (u.usrId || '').toUpperCase(); return id.endsWith('-ACT') || id.endsWith('-ACTIVE'); })
-      .forEach(u => {
-        repMap[u.usrId.trim()] = (u.name || u.usrId).trim().replace(/\s*[-–]\s*(ACTIVE|ACT)$/i, '').trim();
-      });
+    // Resolve display names from NCR in one batch call, then build repMap
+    const usersRes = await doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS&fields=usrId,name&pageSize=500`);
+    const usersBody = usersRes.ok ? await usersRes.json() : {};
+    const nameMap   = {};
+    (usersBody.data || []).forEach(u => {
+      nameMap[(u.usrId || '').trim().toUpperCase()] = (u.name || '').trim();
+    });
 
-    // 2. For customers whose rep already has a warm accountsCache, use it directly.
-    //    Collect only the customers we actually need to fetch.
-    const repAccounts = {}; // repId → [{ ytdSales, priorYtd, tier }]
-    Object.keys(repMap).forEach(id => { repAccounts[id] = []; });
+    const repMap = {};
+    activeReps.forEach(({ id }) => {
+      const raw  = nameMap[id.toUpperCase()] || id;
+      repMap[id] = raw.replace(/\s*[-–]\s*(ACTIVE|ACT)$/i, '').trim() || id;
+    });
 
-    const toFetch = []; // customers needing a live sales-by-category call
+    // 2. Build per-custNo sales maps from all windows
+    const buildMap = (tickets) => {
+      const m = {};
+      for (const t of tickets) {
+        const k = (t.CustNo || t.custNo || '').trim();
+        if (k) m[k] = (m[k] || 0) + parseFloat(t.Total || t.total || 0);
+      }
+      return m;
+    };
+    const ytdMap    = buildMap(cyTickets);
+    const pyYtdMap  = buildMap(pyTickets);
+    const cmMap     = buildMap(cmTickets);
+    const lmMap     = buildMap(lmTickets);
+    const pmMap     = buildMap(pmTickets);
+    const pyCmMap   = buildMap(pyCmTickets);
+    const pyLmMap   = buildMap(pyLmTickets);
+
+    // 3. Walk customer list, join to all windows, group by rep
+    const repData = {};
+    Object.keys(repMap).forEach(id => {
+      repData[id] = { ytd: 0, priorYtd: 0, cm: 0, lm: 0, pm: 0, pyCm: 0, pyLm: 0, accounts: [] };
+    });
 
     for (const c of allCustomers) {
       const repId = (c.salesRep || '').trim();
-      if (!repMap[repId]) continue; // not an active rep we care about
-
-      const cached = accountsCache[repId];
-      if (cached && Date.now() - cached.ts < CACHE_TTL) {
-        // Already have full account objects for this rep — no individual fetch needed
-        continue;
-      }
-      toFetch.push(c);
+      if (!repData[repId]) continue;
+      const d = repData[repId];
+      const k = c.custNo;
+      d.ytd    += ytdMap[k]   || 0;
+      d.priorYtd += pyYtdMap[k] || 0;
+      d.cm     += cmMap[k]    || 0;
+      d.lm     += lmMap[k]    || 0;
+      d.pm     += pmMap[k]    || 0;
+      d.pyCm   += pyCmMap[k]  || 0;
+      d.pyLm   += pyLmMap[k]  || 0;
+      const lastDate  = c.lastSaleDate ? c.lastSaleDate.slice(0, 10) : null;
+      const daysSince = lastDate ? Math.floor((Date.now() - new Date(lastDate)) / 86400000) : 999;
+      const ytdSales  = ytdMap[k] || 0;
+      const priorYtd  = pyYtdMap[k] || 0;
+      d.accounts.push({ tier: computeTier(priorYtd > 0 ? ytdSales / priorYtd : 0, daysSince, ytdSales, priorYtd) });
     }
 
-    // 3. Fire all outstanding sales-by-category calls at full parallelism (capped at 20)
-    const fetchResults = await parallelLimit(toFetch.map(c => async () => {
-      try {
-        const r    = await doFetch('GET', `/api/v1/Customers/${encodeURIComponent(c.custNo)}/sales-by-category`);
-        const body = r.ok ? await r.json() : [];
-        const rows = Array.isArray(body) ? body : (body.data || []);
-        const ytd   = rows.reduce((s, r) => s + (parseFloat(r.currentYtdAmount) || 0), 0);
-        const prior = rows.reduce((s, r) => s + (parseFloat(r.priorYtdAmount)   || 0), 0);
-        const lastDate  = c.lastSaleDate ? c.lastSaleDate.slice(0, 10) : null;
-        const daysSince = lastDate ? Math.floor((Date.now() - new Date(lastDate)) / 86400000) : 999;
-        return { repId: (c.salesRep || '').trim(), ytdSales: ytd, priorYtd: prior,
-                 tier: computeTier(prior > 0 ? ytd / prior : 0, daysSince, ytd, prior) };
-      } catch (_) {
-        return { repId: (c.salesRep || '').trim(), ytdSales: 0, priorYtd: 0, tier: 'AtRisk' };
-      }
-    }), 20);
-
-    // Merge live fetch results
-    for (const row of fetchResults) {
-      if (repAccounts[row.repId]) repAccounts[row.repId].push(row);
-    }
-
-    // Merge cached rep accounts
-    for (const repId of Object.keys(repMap)) {
-      const cached = accountsCache[repId];
-      if (cached && Date.now() - cached.ts < CACHE_TTL) {
-        repAccounts[repId] = cached.data;
-      }
-    }
-
-    // 4. Aggregate per rep
-    const now     = new Date();
-    const quarter = Math.ceil((now.getMonth() + 1) / 3);
-
+    // 4. Compute per-rep stats including monthly goal (prior year × growth factor)
+    const G = 1 + MONTHLY_GROWTH_GOAL_PCT;
     const repStats = Object.entries(repMap).map(([repId, repName]) => {
-      const accounts = repAccounts[repId] || [];
-      const ytd   = accounts.reduce((s, a) => s + (a.ytdSales || 0), 0);
-      const prior = accounts.reduce((s, a) => s + (a.priorYtd || 0), 0);
-      const tiers = { Healthy: 0, Attention: 0, AtRisk: 0, Critical: 0 };
+      const d        = repData[repId] || {};
+      const accounts = d.accounts || [];
+      const tiers    = { Healthy: 0, Attention: 0, AtRisk: 0, Critical: 0 };
       accounts.forEach(a => { if (tiers[a.tier] !== undefined) tiers[a.tier]++; });
       const healthScore = accounts.length > 0
         ? Math.round((tiers.Healthy * 100 + tiers.Attention * 60 + tiers.AtRisk * 25) / accounts.length)
         : 0;
+
+      const cmGoal  = d.pyCm > 0 ? +(d.pyCm * G).toFixed(2) : null;
+      const lmGoal  = d.pyLm > 0 ? +(d.pyLm * G).toFixed(2) : null;
+      const cmOver  = cmGoal !== null ? +(d.cm - cmGoal).toFixed(2) : null;
+      const lmOver  = lmGoal !== null ? +(d.lm - lmGoal).toFixed(2) : null;
+      // Most Improved: lm − pm (only if both have sales)
+      const improvement = (d.lm > 0 && d.pm > 0) ? +(d.lm - d.pm).toFixed(2) : null;
+
       return {
         repId, repName,
-        ytdSales:     +ytd.toFixed(2),
-        priorYtd:     +prior.toFixed(2),
-        pctToTarget:  prior > 0 ? +(ytd / prior).toFixed(4) : 0,
-        pctChange:    prior > 0 ? +((ytd - prior) / prior).toFixed(4) : null,
-        accountCount: accounts.length,
+        accountCount:    accounts.length,
         healthScore,
         ...tiers,
+        // Current month
+        currentMonthSales: +d.cm.toFixed(2),
+        currentMonthGoal:  cmGoal,
+        currentMonthOver:  cmOver,
+        // Last completed month
+        lastMonthSales:    +d.lm.toFixed(2),
+        lastMonthGoal:     lmGoal,
+        lastMonthOver:     lmOver,
+        // Prior month (for Most Improved)
+        priorMonthSales:   +d.pm.toFixed(2),
+        improvement,
       };
     });
 
-    const ranked = repStats
-      .filter(r => r.accountCount > 0)
-      .sort((a, b) => b.ytdSales - a.ytdSales)
-      .map((r, i) => ({ ...r, rank: i + 1 }));
+    const eligibleReps = repStats.filter(r => r.accountCount > 0);
 
-    leaderboardCache.data = { reps: ranked, quarter, year: now.getFullYear(), updatedAt: now.toISOString() };
+    // 5. Compute awards
+    // SOTM: current month in progress — highest (cmSales − cmGoal), reps with no goal excluded
+    const sotmCandidates = eligibleReps.filter(r => r.currentMonthGoal !== null);
+    sotmCandidates.sort((a, b) => b.currentMonthOver - a.currentMonthOver);
+    const sotmWinner = sotmCandidates[0] || null;
+    const allUnderGoal = sotmWinner !== null && sotmWinner.currentMonthOver < 0;
+
+    // Most Improved: highest (lm − pm), both months must have data
+    const miCandidates = eligibleReps.filter(r => r.improvement !== null);
+    miCandidates.sort((a, b) => b.improvement - a.improvement);
+    const miWinner = miCandidates[0] || null;
+
+    // 6. Current-month podium (reps with goal only, ranked by currentMonthOver)
+    const podiumReps = eligibleReps
+      .filter(r => r.currentMonthGoal !== null && r.currentMonthSales > 0)
+      .sort((a, b) => b.currentMonthOver - a.currentMonthOver)
+      .slice(0, 3);
+
+    // 7. Full standings: all eligible reps, reps with goal ranked by overGoal, no-goal reps to bottom
+    const standings = [
+      ...eligibleReps.filter(r => r.currentMonthGoal !== null).sort((a, b) => b.currentMonthOver - a.currentMonthOver),
+      ...eligibleReps.filter(r => r.currentMonthGoal === null).sort((a, b) => b.currentMonthSales - a.currentMonthSales),
+    ].map((r, i) => ({ ...r, standingsRank: i + 1 }));
+
+    const payload = {
+      updatedAt:         now.toISOString(),
+      currentMonthLabel: `${MONTHS[mm]} ${yr}`,
+      lastMonthLabel:    `${MONTHS[lmM]} ${lmY}`,
+      priorMonthLabel:   `${MONTHS[pmM]} ${pmY}`,
+      awards: {
+        sotm: sotmWinner ? {
+          repId:        sotmWinner.repId,
+          repName:      sotmWinner.repName,
+          overGoal:     sotmWinner.currentMonthOver,
+          sales:        sotmWinner.currentMonthSales,
+          goal:         sotmWinner.currentMonthGoal,
+          allUnderGoal,
+          inProgress:   true,
+        } : null,
+        mostImproved: miWinner ? {
+          repId:        miWinner.repId,
+          repName:      miWinner.repName,
+          improvement:  miWinner.improvement,
+          lastMonthSales:  miWinner.lastMonthSales,
+          priorMonthSales: miWinner.priorMonthSales,
+        } : null,
+      },
+      podium:    podiumReps,
+      standings,
+      totalAccounts: eligibleReps.reduce((s, r) => s + r.accountCount, 0),
+      repCount:      eligibleReps.length,
+      // last-month territory revenue (for stat strip)
+      lastMonthTerritoryRevenue: +eligibleReps.reduce((s, r) => s + r.lastMonthSales, 0).toFixed(2),
+    };
+
+    leaderboardCache.data = payload;
     leaderboardCache.ts   = Date.now();
-    res.json(leaderboardCache.data);
+    res.json(payload);
   } catch (e) {
     console.error('/proxy/leaderboard error:', e.message);
     res.status(500).json({ error: e.message });

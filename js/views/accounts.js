@@ -12,10 +12,119 @@ let acctOverviewData = null; // cached rep-overview API response
 
 const HEALTH_COLORS = {
   Healthy:   '#059669',
-  Attention: '#d97706',
+  Attention: '#eab308',
   AtRisk:    '#ea580c',
   Critical:  '#dc2626',
 };
+
+// ── Health-signal tooltip ─────────────────────────────────────
+(function initHealthTooltip() {
+  const styleId = 'hs-tooltip-style';
+  if (!document.getElementById(styleId)) {
+    const s = document.createElement('style');
+    s.id = styleId;
+    s.textContent = `
+      #hs-tip {
+        position: fixed; z-index: 9999; pointer-events: none;
+        background: #1a2332; color: #e2e8f0; border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 6px; padding: 10px 13px; font-size: 12px;
+        font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+        line-height: 1.6; white-space: pre; min-width: 310px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        opacity: 0; transition: opacity 0.1s;
+      }
+      #hs-tip.hs-tip-visible { opacity: 1; }
+      .hs-tip-driver { color: #fbbf24; font-weight: 700; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  let tip = document.getElementById('hs-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'hs-tip';
+    document.body.appendChild(tip);
+  }
+
+  const STATE_LABEL = {
+    // Engagement
+    OnCadence: 'On cadence', Slowing: 'Slowing', Late: 'Late', GoneQuiet: 'Gone quiet',
+    // Financial
+    Growing: 'Growing', Steady: 'Steady', Declining: 'Declining', Collapsing: 'Collapsing',
+    // Target
+    Ahead: 'Ahead', OnPace: 'On pace', Behind: 'Behind', WayBehind: 'Way behind',
+  };
+
+  function money(v) {
+    const abs = Math.abs(v);
+    const s = abs >= 1000 ? '$' + (abs / 1000).toFixed(1) + 'k' : '$' + abs.toFixed(0);
+    return v < 0 ? '-' + s : '+' + s;
+  }
+
+  function buildTip(hs) {
+    const { tier, signals, driverSignal } = hs;
+    const { engagement, financial, target } = signals;
+
+    function row(key, label, detail) {
+      const isDriver = key === driverSignal;
+      const lbl  = label.padEnd(14);
+      const line = `${lbl}${detail}`;
+      return isDriver ? `<span class="hs-tip-driver">▶ ${line}</span>` : `  ${line}`;
+    }
+
+    const engDetail = (() => {
+      const s = engagement;
+      const ds = s.daysSinceOrder >= 999 ? 'never' : s.daysSinceOrder + 'd';
+      const ti = s.typicalInterval !== null ? `, typically ~${s.typicalInterval}d` : ' (fallback thresholds)';
+      return `${STATE_LABEL[s.state]} (${ds}${ti})`;
+    })();
+
+    const finDetail = (() => {
+      if (!financial) return '— (no prior year data)';
+      const f = financial;
+      return `${STATE_LABEL[f.state]} (${money(f.yoyDollar)} / ${f.yoyPct > 0 ? '+' : ''}${f.yoyPct}%)`;
+    })();
+
+    const tgtDetail = (() => {
+      if (!target) return '— (no annual target set)';
+      const t = target;
+      const pp = t.paceVsTarget > 0 ? `+${t.paceVsTarget}pp` : `${t.paceVsTarget}pp`;
+      return `${STATE_LABEL[t.state]} (${pp} vs run rate)`;
+    })();
+
+    const divider = '─'.repeat(36);
+    return [
+      tier.replace('AtRisk', 'At Risk'),
+      divider,
+      row('engagement', 'Engagement', engDetail),
+      row('financial',  'Financial',  finDetail),
+      row('target',     'Target',     tgtDetail),
+    ].join('\n');
+  }
+
+  document.addEventListener('mouseover', e => {
+    const badge = e.target.closest('[data-hs]');
+    if (!badge) return;
+    try {
+      const hs = JSON.parse(badge.getAttribute('data-hs'));
+      tip.innerHTML = buildTip(hs);
+      tip.classList.add('hs-tip-visible');
+    } catch (_) {}
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!tip.classList.contains('hs-tip-visible')) return;
+    const x = e.clientX + 14;
+    const y = e.clientY - 10;
+    tip.style.left = Math.min(x, window.innerWidth - 340) + 'px';
+    tip.style.top  = Math.min(y, window.innerHeight - 140) + 'px';
+  });
+
+  document.addEventListener('mouseout', e => {
+    if (!e.target.closest('[data-hs]')) return;
+    tip.classList.remove('hs-tip-visible');
+  });
+})();
 
 const acctTooltipDefaults = {
   backgroundColor: '#fff',
@@ -75,7 +184,10 @@ function renderOverviewKpis() {
   const activeAccounts = d.monthly.activeAccounts;
 
   const runRatePct   = (d.yearRunRate * 100).toFixed(1);
-  const bsPct        = (d.bestSeller.pct * 100).toFixed(1);
+  const totalBsUnits    = (accountsData || []).reduce((s, a) => s + (a.bsUnits    || 0), 0);
+  const totalAllUnits   = (accountsData || []).reduce((s, a) => s + (a.totalUnits || 0), 0);
+  const repBsPct        = totalAllUnits > 0 ? totalBsUnits / totalAllUnits : (d.bestSeller.pct || 0);
+  const bsPct           = (repBsPct * 100).toFixed(1);
   const activeAccPct = totalAccounts > 0 ? ((activeAccounts / totalAccounts) * 100).toFixed(0) : 0;
 
   // Defer mtdPct / mtdColor until totalMonthGoal is computed below
@@ -84,7 +196,7 @@ function renderOverviewKpis() {
   const mtdRatio     = totalMonthGoal > 0 ? d.monthly.mtd / totalMonthGoal : 0;
   const mtdPct       = (mtdRatio * 100).toFixed(1);
   const mtdColor     = mtdRatio >= 1.0 ? '#059669' : mtdRatio >= 0.75 ? '#d97706' : '#dc2626';
-  const bsColor    = d.bestSeller.pct >= 0.5 ? '#059669' : d.bestSeller.pct >= 0.3 ? '#d97706' : '#dc2626';
+  const bsColor    = repBsPct >= 0.5 ? '#059669' : repBsPct >= 0.3 ? '#d97706' : '#dc2626';
 
   // Daily Needed — uses per-account monthGoal (same source as the Monthly Goal pill) and
   // remainingBusinessDays from rep-overview (already includes today after server fix).
@@ -159,7 +271,7 @@ function renderOverviewKpis() {
                     : `<span class="mgr-chg-down">↓ ${Math.abs(ticketChg)}% vs prior</span>`)
                 : 'no prior yr data')}
             ${pill('Avg Lines (CY)',  d.avg.linesCurrent.toFixed(1), 'lines per ticket CY')}
-            ${pill('Best Sellers on PO', bsPct + '%', `${d.bestSeller.lines} of ${d.bestSeller.total} lines`)}
+            ${pill('Best Sellers on PO', bsPct + '%', `${totalBsUnits.toLocaleString()} of ${totalAllUnits.toLocaleString()} units`)}
           </div>
         </div>
 
@@ -275,6 +387,7 @@ function renderAccountsOverview() {
       case 'pctToTarget': return dir * (a.pctToTarget - b.pctToTarget);
       case 'priorYtd':    return dir * (a.priorYtd    - b.priorYtd);
       case 'pctChange':   return dir * (pctChange(a)  - pctChange(b));
+      case 'bsPct':       return dir * ((a.bsPct || 0)    - (b.bsPct    || 0));
       case 'daysSince':   return dir * (a.daysSinceOrder - b.daysSinceOrder);
       case 'lastOrder':   return dir * (a.lastOrderDate || '').localeCompare(b.lastOrderDate || '');
       default:            return dir * (a.ytdSales - b.ytdSales);
@@ -300,6 +413,7 @@ function renderAccountsOverview() {
     { key: 'pctToTarget', label: '% to Target',         cls: 'num-ctr' },
     { key: 'priorYtd',    label: 'Prior YTD',           cls: 'num-ctr' },
     { key: 'pctChange',   label: '% Change',            cls: 'num-ctr' },
+    { key: 'bsPct',       label: 'BS %',                cls: 'num-ctr' },
     { key: 'daysSince',   label: 'Days Since Order',    cls: 'num-ctr' },
     { key: 'lastOrder',   label: 'Last Order Date',     cls: 'num-ctr' },
   ];
@@ -321,9 +435,10 @@ function renderAccountsOverview() {
     const pctChangeCls  = pctChange !== null ? (parseFloat(pctChange) >= 0 ? 'vel-up' : 'vel-down') : '';
     const pctChangeArrow = pctChange !== null ? (parseFloat(pctChange) >= 0 ? '↑' : '↓') : '';
 
-    const tierKey  = a.tier;
-    const tierCls  = `tier-${tierKey.toLowerCase().replace('atrisk', 'atrisk')}`;
+    const tierKey   = a.tier;
+    const tierCls   = `tier-${tierKey.toLowerCase().replace('atrisk', 'atrisk')}`;
     const tierLabel = tierKey.replace('AtRisk', 'At Risk');
+    const hsAttr    = a.healthSignals ? ` data-hs='${JSON.stringify(a.healthSignals).replace(/'/g, '&#39;')}'` : '';
 
     const daysCls = a.daysSinceOrder >= 60 ? 'vel-down' : a.daysSinceOrder >= 30 ? 'vel-ss' : '';
     const daysStr = a.daysSinceOrder >= 999 ? '—' : a.daysSinceOrder + 'd';
@@ -335,16 +450,17 @@ function renderAccountsOverview() {
       <td><a class="acct-name-link" onclick="openCustomerAccount('${a.custNo}')">${a.name || '—'}</a></td>
       <td class="num-ctr" style="font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80">${a.custNo}</td>
       <td class="num-ctr">${a.state || '—'}</td>
-      <td class="num-ctr"><span class="tier-badge ${tierCls}">${tierLabel}</span></td>
+      <td class="num-ctr"><span class="tier-badge ${tierCls}"${hsAttr}>${tierLabel}</span></td>
       <td class="num-ctr">${fmt$(a.ytdSales)}</td>
       <td class="num-ctr">${a.target > 0 ? fmt$(a.target) : '—'}</td>
       <td class="num-ctr"><span class="${pctTgtCls}">${pctTgt}</span></td>
       <td class="num-ctr">${a.priorYtd > 0 ? fmt$(a.priorYtd) : '—'}</td>
       <td class="num-ctr"><span class="${pctChangeCls}">${pctChangeArrow}</span>${pctChange !== null ? ' ' + pctChange + '%' : '—'}</td>
+      <td class="num-ctr">${a.totalUnits > 0 ? (a.bsPct * 100).toFixed(1) + '%' : '—'}</td>
       <td class="num-ctr"><span class="${daysCls}">${daysStr}</span></td>
       <td class="num-ctr">${a.lastOrderDate || '—'}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="11" style="padding:20px;color:#9ca3af;text-align:center">No accounts found.</td></tr>';
+  }).join('') || '<tr><td colspan="12" style="padding:20px;color:#9ca3af;text-align:center">No accounts found.</td></tr>';
 
   document.getElementById('store-view-content').innerHTML = `
     <div id="acct-overview-kpis">
