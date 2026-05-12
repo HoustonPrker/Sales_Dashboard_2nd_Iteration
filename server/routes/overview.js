@@ -241,7 +241,7 @@ router.get('/rep-overview', async (req, res) => {
     };
 
     overviewCache[rep] = { data: result, ts: Date.now() };
-    routeTimer(`GET /proxy/rep-overview`, t0, { rep, pyMonthTickets: pyMonthTickets.length, monthGoal: monthGoal.toFixed(2), mtdCusts: mtdCustNos.length });
+    routeTimer(`GET /proxy/rep-overview`, t0, { rep, pyMonthTickets: pyMonthAllTickets.length, monthGoal: monthGoal.toFixed(2), mtdCusts: mtdCustNos.length });
     res.json(result);
   } catch (e) {
     console.error('/proxy/rep-overview error:', e.message);
