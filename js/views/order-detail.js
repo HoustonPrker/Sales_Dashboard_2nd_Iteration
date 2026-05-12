@@ -165,8 +165,8 @@ function renderOrderDetail(custNo, cust, order) {
 
         <!-- Donut charts — side-by-side, fixed canvas height so flex-grow can't inflate them -->
         ${lineCount > 0 ? `
-        <div style="flex:1;display:flex;gap:12px;padding-left:16px;align-self:stretch;align-items:center;min-width:0">
-          <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+        <div style="flex:1;display:flex;gap:12px;padding-left:16px;align-self:stretch;align-items:stretch;min-width:0">
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-width:0">
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#fff;margin-bottom:6px;flex-shrink:0">Best-Seller Mix</div>
             <div id="od-bs-wrap" style="position:relative;height:160px;flex:none"><canvas id="od-bs-chart"></canvas></div>
             <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;flex-shrink:0">
@@ -174,7 +174,7 @@ function renderOrderDetail(custNo, cust, order) {
               <span style="display:flex;align-items:center;gap:4px;font-size:12px;color:rgba(255,255,255,0.85)"><span style="width:8px;height:8px;border-radius:2px;background:rgba(255,255,255,0.22);display:inline-block;flex-shrink:0"></span>Other</span>
             </div>
           </div>
-          <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-width:0">
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#fff;margin-bottom:6px;flex-shrink:0">New vs Repeat</div>
             <div id="od-nr-wrap" style="position:relative;height:160px;flex:none"><canvas id="od-nr-chart"></canvas></div>
             <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;flex-shrink:0">

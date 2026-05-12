@@ -12,7 +12,7 @@
 
 const express = require('express');
 const router  = express.Router();
-const { doFetch, fetchAllPages, routeTimer, SALES_REP } = require('../lib/api');
+const { doFetch, fetchAllPages, routeTimer, SALES_REP, MONTHLY_GROWTH_GOAL_PCT } = require('../lib/api');
 
 // 5-minute cache keyed by rep
 const overviewCache = {};
@@ -127,9 +127,9 @@ router.get('/rep-overview', async (req, res) => {
     // MTD window
     const mtdStart = `${yr}-${mm}-01`;
 
-    // Prior year same month
+    // Prior year same month — full month, fixed target (last day via Date arithmetic)
     const pyMonthStart = `${yr - 1}-${mm}-01`;
-    const pyMonthEnd   = `${yr - 1}-${mm}-${dd}`;
+    const pyMonthEnd   = new Date(yr - 1, parseInt(mm, 10), 0).toISOString().slice(0, 10);
 
     // Current year YTD for avg ticket/lines (Jan 1 – today)
     const ytdStart = `${yr}-01-01`;
@@ -141,14 +141,14 @@ router.get('/rep-overview', async (req, res) => {
     const repEnc = encodeURIComponent(rep);
 
     // Phase 1 — fire all independent fetches in parallel
-    const [cyDays, pyMonthDays, pyYtdDays, mtdTickets] = await Promise.all([
+    const [cyDays, pyMonthTickets, pyYtdDays, mtdTickets] = await Promise.all([
       // CY YTD daily rows (for avg ticket/lines)
       fetchAllPages(
         `/api/v1/sales-analysis/by-sales-rep?filter=salesRep:eq:${repEnc},postDate:gte:${ytdStart},postDate:lte:${today}&fields=postDate,ticketCount,saleSubTotal,saleLines&pageSize=200`
       ),
-      // PY same month (for monthly goal)
+      // PY full same month — ticket-history Total matches /proxy/accounts monthGoal field
       fetchAllPages(
-        `/api/v1/sales-analysis/by-sales-rep?filter=salesRep:eq:${repEnc},postDate:gte:${pyMonthStart},postDate:lte:${pyMonthEnd}&fields=postDate,saleSubTotal,ticketCount,saleLines&pageSize=200`
+        `/api/v1/pos/ticket-history?filter=SalesRep:eq:${repEnc},BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=Total&pageSize=500`
       ),
       // PY YTD daily rows (for avg ticket/lines prior year)
       fetchAllPages(
@@ -163,19 +163,19 @@ router.get('/rep-overview', async (req, res) => {
     // ── Year run rate ─────────────────────────────────────────
     const { elapsed, total: bdTotal, rate: yearRunRate } = computeYearRunRate(now);
 
-    // ── Monthly goal = PY same month total ───────────────────
-    const monthGoal = pyMonthDays.reduce((s, r) => s + (parseFloat(r.saleSubTotal) || 0), 0);
+    // ── Monthly goal = PY full same month sum(Total) × growth multiplier ─
+    // Matches /proxy/accounts per-customer monthGoal formula exactly.
+    const pyMonthRaw = pyMonthTickets.reduce((s, t) => s + (parseFloat(t.Total || t.total) || 0), 0);
+    const monthGoal  = +(pyMonthRaw * (1 + MONTHLY_GROWTH_GOAL_PCT)).toFixed(2);
 
     // ── MTD from CY daily rows ────────────────────────────────
     const mtdDays = cyDays.filter(r => (r.postDate || '').slice(0, 7) === `${yr}-${mm}`);
     const mtdTotal = mtdDays.reduce((s, r) => s + (parseFloat(r.saleSubTotal) || 0), 0);
     const pctToGoal = monthGoal > 0 ? +(mtdTotal / monthGoal).toFixed(4) : 0;
 
-    // Remaining business days in month (from tomorrow through end of month)
-    const monthEnd = new Date(yr, now.getMonth() + 1, 0); // last day of this month
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const remainingBD = countBusinessDays(tomorrow, monthEnd);
+    // Remaining business days in month — includes today (rep can still sell today)
+    const monthEnd    = new Date(yr, now.getMonth() + 1, 0); // last day of this month
+    const remainingBD = countBusinessDays(now, monthEnd);
 
     const gap = monthGoal - mtdTotal;
     const dailySalesNeeded = remainingBD > 0 && gap > 0 ? +(gap / remainingBD).toFixed(2) : 0;
@@ -230,7 +230,7 @@ router.get('/rep-overview', async (req, res) => {
     };
 
     overviewCache[rep] = { data: result, ts: Date.now() };
-    routeTimer(`GET /proxy/rep-overview`, t0, { rep, tickets: mtdTickets.length, mtdCusts: mtdCustNos.length });
+    routeTimer(`GET /proxy/rep-overview`, t0, { rep, pyMonthTickets: pyMonthTickets.length, monthGoal: monthGoal.toFixed(2), mtdCusts: mtdCustNos.length });
     res.json(result);
   } catch (e) {
     console.error('/proxy/rep-overview error:', e.message);

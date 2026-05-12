@@ -191,7 +191,7 @@ router.get('/accounts', async (req, res) => {
       ),
       // PY same month tickets — used for per-account monthly goal (matches customer account page)
       fetchAllPages(
-        `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=CustNo,saleSubtotal,returnSubtotal&pageSize=500`
+        `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=CustNo,Total&pageSize=500`
       ),
     ]);
     console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY / ${pyMonthTickets.length} pyMonth tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
@@ -216,8 +216,7 @@ router.get('/accounts', async (req, res) => {
     for (const t of pyMonthTickets) {
       const c = (t.CustNo || t.custNo || '').trim();
       if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0, monthGoal: 0 };
-      if (c) salesMap[c].monthGoal += parseFloat(t.saleSubtotal || t.SaleSubtotal || 0)
-                                    + parseFloat(t.returnSubtotal || t.ReturnSubtotal || 0);
+      if (c) salesMap[c].monthGoal += parseFloat(t.Total || t.total || 0);
     }
 
     // 3. Build account records

@@ -45,6 +45,23 @@ async function fetchRepOverview() {
     const res = await fetch(`/proxy/rep-overview?rep=${encodeURIComponent(rep)}`);
     if (!res.ok) return;
     acctOverviewData = await res.json();
+
+    // Regression guard: per-account monthGoal sum and rep-overview monthly.goal
+    // should agree within 10%. A wider gap means the customer-list scope has drifted
+    // (e.g. inactive accounts, rep reassignments). Log so it surfaces in DevTools.
+    if (Array.isArray(accountsData) && accountsData.length > 0) {
+      const perAcctSum  = accountsData.reduce((s, a) => s + (a.monthGoal || 0), 0);
+      const repOvGoal   = acctOverviewData.monthly && acctOverviewData.monthly.goal;
+      if (perAcctSum > 0 && repOvGoal > 0) {
+        const drift = Math.abs(perAcctSum - repOvGoal) / perAcctSum;
+        if (drift > 0.10) {
+          console.warn(
+            `[Monthly Goal drift] per-account sum $${perAcctSum.toFixed(2)} vs rep-overview $${repOvGoal.toFixed(2)} — ${(drift*100).toFixed(1)}% gap. Check for inactive/transferred accounts.`
+          );
+        }
+      }
+    }
+
     renderOverviewKpis();
   } catch (_) {}
 }
@@ -68,7 +85,13 @@ function renderOverviewKpis() {
   const mtdPct       = (mtdRatio * 100).toFixed(1);
   const mtdColor     = mtdRatio >= 1.0 ? '#059669' : mtdRatio >= 0.75 ? '#d97706' : '#dc2626';
   const bsColor    = d.bestSeller.pct >= 0.5 ? '#059669' : d.bestSeller.pct >= 0.3 ? '#d97706' : '#dc2626';
-  const dailyColor = d.monthly.dailySalesNeeded > 0 ? '#d97706' : '#059669';
+
+  // Daily Needed — uses per-account monthGoal (same source as the Monthly Goal pill) and
+  // remainingBusinessDays from rep-overview (already includes today after server fix).
+  const remainingBD  = d.monthly.remainingBusinessDays;
+  const gapToGoal    = totalMonthGoal - d.monthly.mtd;
+  const dailyNeeded  = remainingBD > 0 && gapToGoal > 0 ? gapToGoal / remainingBD : 0;
+  const dailyColor   = dailyNeeded > 0 ? '#d97706' : '#059669';
 
   const ticketChg = d.avg.ticketPrior > 0
     ? ((d.avg.ticketCurrent - d.avg.ticketPrior) / d.avg.ticketPrior * 100).toFixed(1)
@@ -123,7 +146,7 @@ function renderOverviewKpis() {
 
           <!-- Row 2 — 6 pills -->
           <div class="mgr-pill-row">
-            ${pill('Daily Needed',    d.monthly.dailySalesNeeded > 0 ? fmt$(d.monthly.dailySalesNeeded) : '—', 'to close gap')}
+            ${pill('Daily Needed',    dailyNeeded > 0 ? fmt$(dailyNeeded) : '—', 'to close gap')}
             ${pill('Active Accounts', `${activeAccounts} <span style="opacity:0.55;font-size:14px;font-weight:500">/ ${totalAccounts}</span>`, `${activeAccPct}% ordered this month`)}
             ${pill('Avg Ticket (CY)', fmt$(d.avg.ticketCurrent), 'current year YTD')}
             ${pill('Avg Ticket (PY)', fmt$(d.avg.ticketPrior),
