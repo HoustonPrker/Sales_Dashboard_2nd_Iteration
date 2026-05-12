@@ -450,11 +450,11 @@ function renderCA(cust, catData, mtd, orders) {
         ${buildCatTable(catData)}
       </div>
       <div id="ca-cat-charts" style="display:flex;flex-direction:column;align-self:stretch;min-height:0;overflow:hidden">
-        <div class="chart-panel" style="margin-bottom:12px;flex-shrink:0">
+        <div class="chart-panel" style="flex:1;display:flex;flex-direction:column;min-height:0;margin-bottom:12px">
           <div class="chart-title">Category Mix</div>
-          <div class="chart-container" style="height:300px"><canvas id="ca-donut-chart"></canvas></div>
+          <div class="chart-container" style="flex:1;height:0;min-height:120px;position:relative"><canvas id="ca-donut-chart"></canvas></div>
         </div>
-        <div class="chart-panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div class="chart-panel" style="flex:2;display:flex;flex-direction:column;min-height:0">
           <div class="chart-title">Category % Change vs Prior YTD</div>
           <div class="chart-container" style="flex:1;height:0;min-height:150px;position:relative"><canvas id="ca-bar-chart"></canvas></div>
         </div>
