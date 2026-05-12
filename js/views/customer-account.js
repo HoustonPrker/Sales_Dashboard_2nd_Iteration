@@ -444,21 +444,28 @@ function renderCA(cust, catData, mtd, orders) {
       </div>
     </div>
 
-    <!-- Category: table left, charts/drill-down right -->
+    <!-- Category: table left, charts right — grid drives shared height -->
     <div style="display:grid;grid-template-columns:minmax(min-content,1fr) minmax(0,1fr);gap:16px;align-items:stretch;margin-bottom:12px">
-      <div id="ca-cat-section">
+
+      <!-- Left: category table (no margin-bottom — grid owns the spacing) -->
+      <div id="ca-cat-section" style="display:flex;flex-direction:column;min-height:0">
         ${buildCatTable(catData)}
       </div>
-      <div id="ca-cat-charts" style="display:flex;flex-direction:column;align-self:stretch;min-height:0;overflow:hidden">
-        <div class="chart-panel" style="flex:1;display:flex;flex-direction:column;min-height:0;margin-bottom:12px">
-          <div class="chart-title">Category Mix</div>
-          <div class="chart-container" style="flex:1;height:0;min-height:120px;position:relative"><canvas id="ca-donut-chart"></canvas></div>
+
+      <!-- Right: single card container matching left, charts fill it via flex -->
+      <div id="ca-cat-charts" style="background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);display:flex;flex-direction:column;min-height:0;overflow:hidden">
+        <!-- Donut: flex:1 -->
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0;padding:16px 18px 8px;border-bottom:1px solid #f3f4f6">
+          <div class="chart-title" style="margin-bottom:8px">Category Mix</div>
+          <div style="flex:1;min-height:0;position:relative"><canvas id="ca-donut-chart"></canvas></div>
         </div>
-        <div class="chart-panel" style="flex:2;display:flex;flex-direction:column;min-height:0">
-          <div class="chart-title">Category % Change vs Prior YTD</div>
-          <div class="chart-container" style="flex:1;height:0;min-height:150px;position:relative"><canvas id="ca-bar-chart"></canvas></div>
+        <!-- Bar chart: flex:2 -->
+        <div style="flex:2;display:flex;flex-direction:column;min-height:0;padding:16px 18px 12px">
+          <div class="chart-title" style="margin-bottom:8px">Category % Change vs Prior YTD</div>
+          <div style="flex:1;min-height:0;position:relative"><canvas id="ca-bar-chart"></canvas></div>
         </div>
       </div>
+
     </div>
 
     <!-- Order History (full width) -->
@@ -836,7 +843,7 @@ function buildCatTable(catData) {
     </tr>`;
 
   return `
-    <div class="card" style="margin-bottom:12px;padding:0">
+    <div class="card" style="padding:0;height:100%;box-sizing:border-box">
       <div style="padding:14px 20px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #f3f4f6">
         <span style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80">Category Breakdown — click a category to drill into items</span>
         <div style="display:flex;gap:8px;flex-shrink:0">
@@ -1105,7 +1112,7 @@ function renderItemDrill() {
     </table>`;
   }
 
-  sec.style.cssText = 'display:flex;flex-direction:column;align-self:stretch;min-height:0;overflow:hidden';
+  sec.style.cssText = 'background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);display:flex;flex-direction:column;min-height:0;overflow:hidden';
   const tabLabel = tab === 'best' ? `Best Selling Items (${topItems.length})` : `YTD Purchased (${ytdItems.length})`;
   const hintText = tab === 'best'
     ? 'highlighted rows = not buying · green/red = recency'
@@ -1135,7 +1142,7 @@ function closeCategoryDrill() {
   const charts = document.getElementById('ca-cat-charts');
   if (charts) {
     // Restore grid alignment to stretch (charts column tracks category column height)
-    charts.style.cssText = 'display:flex;flex-direction:column;align-self:stretch;min-height:0;overflow:hidden';
+    charts.style.cssText = 'background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);display:flex;flex-direction:column;min-height:0;overflow:hidden';
     charts.innerHTML = `
       <div class="chart-panel" style="margin-bottom:12px;flex-shrink:0">
         <div class="chart-title">Category Mix</div>
