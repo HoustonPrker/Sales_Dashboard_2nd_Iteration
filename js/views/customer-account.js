@@ -922,50 +922,54 @@ function printCatTable() {
       h2 { font-size: 18px; margin: 0 0 4px; }
       p  { font-size: 12px; color: #6b7280; margin: 0 0 16px; }
       table { border-collapse: collapse; width: 100%; font-size: 13px; }
-      th { background: #f3f4f6; text-align: left; padding: 8px 12px; font-weight: 700; border-bottom: 2px solid #e5e7eb; }
-      th.r, td.r { text-align: right; }
-      td { padding: 7px 12px; border-bottom: 1px solid #f3f4f6; }
+      th { background: #f3f4f6; text-align: left; padding: 8px 12px; font-weight: 700; border-bottom: 2px solid #e5e7eb; color: #1a2332; }
+      th.num, td.num { text-align: right; }
+      td { padding: 7px 12px; border-bottom: 1px solid #f3f4f6; color: #1a2332; }
       tr:last-child td { font-weight: 700; background: #f8fafc; border-top: 2px solid #e5e7eb; }
-      .g { color: #059669; } .r { color: #dc2626; }
+      .up { color: #059669; } .dn { color: #dc2626; }
     </style></head><body>
     <h2>${custName} — Category Breakdown</h2>
     <p>Printed ${new Date().toLocaleDateString()}</p>
     <table>
       <thead><tr>
-        <th>Category</th><th class="r">Current YTD $</th><th class="r">Curr Qty</th>
-        <th class="r">Prior YTD $</th><th class="r">Prior Qty</th>
-        <th class="r">$ Change</th><th class="r">% Change</th>
+        <th>Category</th><th class="num">Current YTD $</th><th class="num">Curr Qty</th>
+        <th class="num">Prior YTD $</th><th class="num">Prior Qty</th>
+        <th class="num">$ Change</th><th class="num">% Change</th>
       </tr></thead><tbody>`);
   const data = window.caLastCatData || [];
+  const fmt = n => '$' + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  // Only color $ Change / % Change when |pct| > 10%
+  const chgClass = (dc, pct) => {
+    if (pct === null || Math.abs(pct) <= 10) return '';
+    return dc >= 0 ? 'up' : 'dn';
+  };
   let totCurr = 0, totPrior = 0, totCurrQ = 0, totPriorQ = 0;
   data.forEach(c => {
     totCurr += c.currentYtdAmt || 0; totPrior += c.priorYtdAmt || 0;
     totCurrQ += c.currentQty || 0;   totPriorQ += c.priorQty || 0;
     const dc  = c.dollarChange || 0;
     const pct = c.priorYtdAmt > 0 ? ((c.currentYtdAmt - c.priorYtdAmt) / c.priorYtdAmt * 100) : null;
-    const dcCl  = dc >= 0 ? 'g' : 'r';
-    const pctCl = pct === null ? '' : pct >= 0 ? 'g' : 'r';
-    const fmt   = n => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const cl  = chgClass(dc, pct);
     win.document.write(`<tr>
       <td>${c.description || c.categoryCode}</td>
-      <td class="r">${fmt(c.currentYtdAmt)}</td>
-      <td class="r">${Math.round(c.currentQty || 0).toLocaleString()}</td>
-      <td class="r">${c.priorYtdAmt > 0 ? fmt(c.priorYtdAmt) : '—'}</td>
-      <td class="r">${c.priorQty > 0 ? Math.round(c.priorQty).toLocaleString() : '—'}</td>
-      <td class="r ${dcCl}">${dc >= 0 ? '+' : ''}${fmt(dc)}</td>
-      <td class="r ${pctCl}">${pct !== null ? (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%' : '—'}</td>
+      <td class="num">${fmt(c.currentYtdAmt)}</td>
+      <td class="num">${Math.round(c.currentQty || 0).toLocaleString()}</td>
+      <td class="num">${c.priorYtdAmt > 0 ? fmt(c.priorYtdAmt) : '—'}</td>
+      <td class="num">${c.priorQty > 0 ? Math.round(c.priorQty).toLocaleString() : '—'}</td>
+      <td class="num ${cl}">${dc >= 0 ? '+' : '-'}${fmt(dc)}</td>
+      <td class="num ${cl}">${pct !== null ? (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%' : '—'}</td>
     </tr>`);
   });
   const totDollar = totCurr - totPrior;
   const totPct    = totPrior > 0 ? ((totCurr - totPrior) / totPrior * 100) : null;
-  const fmt = n => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const totCl     = chgClass(totDollar, totPct);
   win.document.write(`<tr>
-    <td>TOTAL</td><td class="r">${fmt(totCurr)}</td>
-    <td class="r">${Math.round(totCurrQ).toLocaleString()}</td>
-    <td class="r">${fmt(totPrior)}</td>
-    <td class="r">${Math.round(totPriorQ).toLocaleString()}</td>
-    <td class="r ${totDollar >= 0 ? 'g' : 'r'}">${totDollar >= 0 ? '+' : ''}${fmt(totDollar)}</td>
-    <td class="r ${totPct === null ? '' : totPct >= 0 ? 'g' : 'r'}">${totPct !== null ? (totPct >= 0 ? '+' : '') + totPct.toFixed(1) + '%' : '—'}</td>
+    <td>TOTAL</td><td class="num">${fmt(totCurr)}</td>
+    <td class="num">${Math.round(totCurrQ).toLocaleString()}</td>
+    <td class="num">${fmt(totPrior)}</td>
+    <td class="num">${Math.round(totPriorQ).toLocaleString()}</td>
+    <td class="num ${totCl}">${totDollar >= 0 ? '+' : '-'}${fmt(totDollar)}</td>
+    <td class="num ${totCl}">${totPct !== null ? (totPct >= 0 ? '+' : '') + totPct.toFixed(1) + '%' : '—'}</td>
   </tr>`);
   win.document.write('</tbody></table></body></html>');
   win.document.close();
