@@ -204,7 +204,7 @@ function renderOrderDetail(custNo, cust, order) {
         <div style="font-size:14px;font-weight:700;color:#1a2332">Line Items <span style="font-weight:400;color:#9ca3af;font-size:12px">(${lineCount} lines · ${fmt$(totExt)} total)</span></div>
       </div>
       ${toolbar}
-      <div class="inv-wrap" style="max-height:560px" id="od-table-wrap">
+      <div class="inv-wrap" id="od-table-wrap">
         ${odBuildTable(lines, lines, fmt$)}
       </div>
     </div>`;
