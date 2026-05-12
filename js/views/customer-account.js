@@ -172,7 +172,6 @@ function renderCA(cust, catData, mtd, orders) {
   const state     = cust.state || '—';
   const salesRep  = cust.salesRep || '—';
   const segment   = cust.categoryCode || '—';
-  const phone     = cust.phone1 || cust.phone2 || cust.busPhone || cust.phoneNo || cust.phone || '';
   const rawDiscount = cust.best_price_code || cust.USER_BEST_PRICE_COD_CUST || null;
   const discountStr = (() => {
     if (!rawDiscount) return 'No Discount';
@@ -342,7 +341,7 @@ function renderCA(cust, catData, mtd, orders) {
             <div>${salesRep} · ${state}${segment && segment !== '—' ? ' · ' + segment : ''}</div>
             <div>${discountStr}</div>
           </div>
-          ${phone ? `<a href="tel:${phone.replace(/[^\d+]/g,'')}" style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.8);text-decoration:none;font-weight:600" title="Call ${phone}">${phone}</a>` : ''}
+          <div style="margin-top:6px;font-size:12px;color:rgba(255,255,255,0.55);font-family:monospace;letter-spacing:0.5px">${custNo}</div>
         </div>
 
         <!-- Right: 2-row KPI grid -->
