@@ -56,16 +56,30 @@ function computeTier(pctToTarget, daysSince, ytdSales, priorYtd) {
 // Each rep has 4 user records: REPID, REPID-ACT, REPID-INA, REPID-NEW.
 // Customer.salesRep stores the usrId directly (e.g. "BRIANH-ACT").
 // We show only the -ACT variants so the picker maps 1:1 to active customer accounts.
+const normalizeRepId = id => (id || '').toUpperCase().replace(/-ACTIVE$|-ACT$/, '').trim();
+
 router.get('/reps', async (req, res) => {
   try {
-    // Fetch all KGS workgroup users — no secCod filter so CS staff are included
-    const r    = await doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS&fields=usrId,name&pageSize=500`);
-    const body = r.ok ? await r.json() : {};
+    // Both calls in parallel — customers only needs salesRep field, one large page
+    const [usersRes, custRes] = await Promise.all([
+      doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS&fields=usrId,name&pageSize=500`),
+      doFetch('GET', `/api/v1/Customers?fields=salesRep&pageSize=500`),
+    ]);
+
+    // Normalized set of rep IDs that own at least one customer
+    const custBody = custRes.ok ? await custRes.json() : {};
+    const custRows = custBody.data || (Array.isArray(custBody) ? custBody : []);
+    const repsWithAccounts = new Set(
+      custRows.map(c => normalizeRepId(c.salesRep)).filter(Boolean)
+    );
+
+    const body = usersRes.ok ? await usersRes.json() : {};
     const rows = body.data || (Array.isArray(body) ? body : []);
     const reps = rows
       .filter(u => {
         const id = (u.usrId || '').toUpperCase();
-        return id.endsWith('-ACT') || id.endsWith('-ACTIVE');
+        const isActive = id.endsWith('-ACT') || id.endsWith('-ACTIVE');
+        return isActive && repsWithAccounts.has(normalizeRepId(id));
       })
       .map(u => ({
         id:   (u.usrId || '').trim(),
