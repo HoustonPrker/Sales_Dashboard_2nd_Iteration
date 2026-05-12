@@ -9,12 +9,17 @@
 
 const express      = require('express');
 const router       = express.Router();
-const { doFetch, fetchAllPages, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP } = require('../lib/api');
+const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP } = require('../lib/api');
 const categoryCache = require('../lib/category-cache');
 
 // ── In-memory cache keyed by rep (5-minute TTL) ───────────────
 const accountsCache = {};  // { [rep]: { data, ts } }
 const CACHE_TTL     = 5 * 60 * 1000;
+
+// ── Per-customer caches (5-minute TTL) ───────────────────────
+const custDetailCache = {};  // { [custNo]: { data, ts } }
+const custOrdersCache = {};  // { [custNo]: { data, ts } }
+const custMtdCache    = {};  // { [custNo]: { data, ts } }
 
 // ── Leaderboard cache (15-minute TTL) ────────────────────────
 const leaderboardCache = { data: null, ts: 0 };
@@ -277,13 +282,17 @@ router.get('/customers/search', async (req, res) => {
 // ── GET /proxy/customer/:custNo ───────────────────────────────
 router.get('/customer/:custNo', async (req, res) => {
   try {
-    const r    = await doFetch('GET', `/api/v1/Customers/${encodeURIComponent(req.params.custNo)}?includeCustomFields=true&compact=true`);
+    const key = req.params.custNo;
+    if (custDetailCache[key] && Date.now() - custDetailCache[key].ts < CACHE_TTL) {
+      return res.json(custDetailCache[key].data);
+    }
+    const r    = await doFetch('GET', `/api/v1/Customers/${encodeURIComponent(key)}?includeCustomFields=true&compact=true`);
     const body = await r.json();
     const d    = body.data || body;
-    // Surface discount custom field at a predictable key
     if (d && d.USER_BEST_PRICE_COD_CUST !== undefined) {
       d.best_price_code = d.USER_BEST_PRICE_COD_CUST || null;
     }
+    if (r.ok) custDetailCache[key] = { data: d, ts: Date.now() };
     res.status(r.status).json(d);
   } catch (e) {
     console.error(e);
@@ -294,14 +303,18 @@ router.get('/customer/:custNo', async (req, res) => {
 // ── GET /proxy/orders/:custNo — 2-year order history ─────────
 router.get('/orders/:custNo', async (req, res) => {
   try {
-    const custNo = encodeURIComponent(req.params.custNo);
+    const key = req.params.custNo;
+    if (custOrdersCache[key] && Date.now() - custOrdersCache[key].ts < CACHE_TTL) {
+      return res.json(custOrdersCache[key].data);
+    }
+    const custNo = encodeURIComponent(key);
     const since  = (() => {
       const d = new Date();
       d.setFullYear(d.getFullYear() - 2);
       return d.toISOString().slice(0, 10);
     })();
     const today = new Date().toISOString().slice(0, 10);
-    const raw = await fetchAllPages(
+    const raw = await fetchAllPagesPar(
       `/api/v1/pos/ticket-history?filter=custNo:eq:${custNo},businessDate:gte:${since},businessDate:lte:${today}&fields=TicketNo,Total,SaleLines,BusinessDate&pageSize=200`
     );
     const orders = raw.map(o => ({
@@ -310,6 +323,7 @@ router.get('/orders/:custNo', async (req, res) => {
       amount:    parseFloat(o.Total || o.total   || 0),
       itemCount: o.SaleLines   || o.saleLines    || null,
     }));
+    custOrdersCache[key] = { data: orders, ts: Date.now() };
     res.json(orders);
   } catch (e) {
     console.error(e);
@@ -345,7 +359,11 @@ router.get('/order-lines/:ticketNo', async (req, res) => {
 // ── GET /proxy/mtd/:custNo — month-to-date sales ──────────────
 router.get('/mtd/:custNo', async (req, res) => {
   try {
-    const custNo = encodeURIComponent(req.params.custNo);
+    const key = req.params.custNo;
+    if (custMtdCache[key] && Date.now() - custMtdCache[key].ts < CACHE_TTL) {
+      return res.json(custMtdCache[key].data);
+    }
+    const custNo = encodeURIComponent(key);
     const now    = new Date();
     const mtdStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     const mtdEnd   = now.toISOString().slice(0, 10);
@@ -356,8 +374,9 @@ router.get('/mtd/:custNo', async (req, res) => {
 
     const mtdTotal  = tickets.reduce((s, t) => s + (parseFloat(t.Total || t.total) || 0), 0);
     const orderDays = new Set(tickets.map(t => (t.businessDate || '').slice(0, 10))).size;
-
-    res.json({ total: +mtdTotal.toFixed(2), orderDays, orders: tickets.length });
+    const result    = { total: +mtdTotal.toFixed(2), orderDays, orders: tickets.length };
+    custMtdCache[key] = { data: result, ts: Date.now() };
+    res.json(result);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });

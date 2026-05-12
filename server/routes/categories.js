@@ -10,8 +10,9 @@ const { doFetch, fetchAllPages, ytdDateRange, SALES_REP } = require('../lib/api'
 const categoryCache = require('../lib/category-cache');
 
 // Cache for all-categories keyed by rep (5 min TTL)
-const allCatCache = {};
-const CACHE_TTL   = 5 * 60 * 1000;
+const allCatCache  = {};
+const custCatCache = {};  // per-customer { [custNo]: { data, ts } }
+const CACHE_TTL    = 5 * 60 * 1000;
 
 function aggregateCategories(rawRows) {
   const agg = {};
@@ -36,12 +37,15 @@ function aggregateCategories(rawRows) {
 // ── GET /proxy/categories/:custNo ─────────────────────────────
 router.get('/categories/:custNo', async (req, res) => {
   try {
-    const custNo = encodeURIComponent(req.params.custNo);
+    const key = req.params.custNo;
+    if (custCatCache[key] && Date.now() - custCatCache[key].ts < CACHE_TTL) {
+      return res.json(custCatCache[key].data);
+    }
+    const custNo = encodeURIComponent(key);
     const r      = await doFetch('GET', `/api/v1/Customers/${custNo}/sales-by-category`);
     if (!r.ok) return res.status(r.status).json([]);
     const body = await r.json();
     const rows = Array.isArray(body) ? body : (body.data || []);
-    // Normalize fields
     const result = rows.map(c => ({
       categoryCode:  c.categoryCode || '',
       description:   c.description  || c.categoryCode || '',
@@ -54,6 +58,7 @@ router.get('/categories/:custNo', async (req, res) => {
         : parseFloat(c.currentYtdAmount || 0) - parseFloat(c.priorYtdAmount || 0),
     })).filter(c => c.currentYtdAmt > 0 || c.priorYtdAmt > 0)
       .sort((a, b) => b.currentYtdAmt - a.currentYtdAmt);
+    custCatCache[key] = { data: result, ts: Date.now() };
     res.json(result);
   } catch (e) {
     console.error(e);
