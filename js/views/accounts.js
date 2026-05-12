@@ -58,11 +58,15 @@ function renderOverviewKpis() {
   const activeAccounts = d.monthly.activeAccounts;
 
   const runRatePct   = (d.yearRunRate * 100).toFixed(1);
-  const mtdPct       = (d.monthly.pctToGoal * 100).toFixed(1);
   const bsPct        = (d.bestSeller.pct * 100).toFixed(1);
   const activeAccPct = totalAccounts > 0 ? ((activeAccounts / totalAccounts) * 100).toFixed(0) : 0;
 
-  const mtdColor   = d.monthly.pctToGoal >= 1.0 ? '#059669' : d.monthly.pctToGoal >= 0.75 ? '#d97706' : '#dc2626';
+  // Defer mtdPct / mtdColor until totalMonthGoal is computed below
+  const totalYtd      = (accountsData || []).reduce((s, a) => s + a.ytdSales, 0);
+  const totalMonthGoal = (accountsData || []).reduce((s, a) => s + (a.monthGoal || 0), 0);
+  const mtdRatio     = totalMonthGoal > 0 ? d.monthly.mtd / totalMonthGoal : 0;
+  const mtdPct       = (mtdRatio * 100).toFixed(1);
+  const mtdColor     = mtdRatio >= 1.0 ? '#059669' : mtdRatio >= 0.75 ? '#d97706' : '#dc2626';
   const bsColor    = d.bestSeller.pct >= 0.5 ? '#059669' : d.bestSeller.pct >= 0.3 ? '#d97706' : '#dc2626';
   const dailyColor = d.monthly.dailySalesNeeded > 0 ? '#d97706' : '#059669';
 
@@ -81,7 +85,6 @@ function renderOverviewKpis() {
     return `<span class="mgr-bench-chg ${cls}">${sign} ${Math.abs(v)}%</span>`;
   };
 
-  const totalYtd      = (accountsData || []).reduce((s, a) => s + a.ytdSales, 0);
   const totalAcctsFmt = totalAccounts.toLocaleString();
 
   const pill = (label, value, sub, valueStyle) => `
@@ -113,7 +116,7 @@ function renderOverviewKpis() {
             </div>
             ${pill('Total Accounts',  totalAcctsFmt,         'all rep accounts')}
             ${pill('Total YTD Sales', fmt$(totalYtd),         'current year to date')}
-            ${pill('Monthly Goal',    fmt$(d.monthly.goal),   'prior yr same month')}
+            ${pill('Monthly Goal',    fmt$(totalMonthGoal),   'prior yr same month')}
             ${pill('MTD Sales',       fmt$(d.monthly.mtd),    `${d.monthly.remainingBusinessDays} biz days left`)}
             ${pill('MTD %',           mtdPct + '%',           'of monthly goal')}
           </div>

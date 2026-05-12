@@ -159,8 +159,11 @@ router.get('/accounts', async (req, res) => {
     const pyEnd     = `${yr - 1}-${mm}-${dd}`;
     const repTicketFilter = rep ? `SalesRep:eq:${encodeURIComponent(rep)},` : '';
 
+    const pyMonthStart = `${yr - 1}-${mm}-01`;
+    const pyMonthEnd   = `${yr - 1}-${mm}-${dd}`;
+
     const t1 = Date.now();
-    const [customers, cyTickets, pyTickets] = await Promise.all([
+    const [customers, cyTickets, pyTickets, pyMonthTickets] = await Promise.all([
       fetchAllPages(
         `/api/v1/Customers?${repFilter}fields=custNo,name,state,salesRep,lastSaleDate&pageSize=200`
       ),
@@ -172,8 +175,12 @@ router.get('/accounts', async (req, res) => {
       fetchAllPages(
         `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${pyStart},BusinessDate:lte:${pyEnd}&fields=CustNo,Total&pageSize=500`
       ),
+      // PY same month tickets — used for per-account monthly goal (matches customer account page)
+      fetchAllPages(
+        `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=CustNo,Total&pageSize=500`
+      ),
     ]);
-    console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
+    console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY / ${pyMonthTickets.length} pyMonth tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
 
     if (!customers.length) {
       accountsCache[cacheKey] = { data: [], ts: Date.now() };
@@ -184,18 +191,23 @@ router.get('/accounts', async (req, res) => {
     const salesMap = {};
     for (const t of cyTickets) {
       const c = (t.CustNo || t.custNo || '').trim();
-      if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0 };
+      if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0, monthGoal: 0 };
       if (c) salesMap[c].ytd += parseFloat(t.Total || t.total || 0);
     }
     for (const t of pyTickets) {
       const c = (t.CustNo || t.custNo || '').trim();
-      if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0 };
+      if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0, monthGoal: 0 };
       if (c) salesMap[c].prior += parseFloat(t.Total || t.total || 0);
+    }
+    for (const t of pyMonthTickets) {
+      const c = (t.CustNo || t.custNo || '').trim();
+      if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0, monthGoal: 0 };
+      if (c) salesMap[c].monthGoal += parseFloat(t.Total || t.total || 0);
     }
 
     // 3. Build account records
     const accounts = customers.map(c => {
-      const s        = salesMap[c.custNo] || { ytd: 0, prior: 0 };
+      const s        = salesMap[c.custNo] || { ytd: 0, prior: 0, monthGoal: 0 };
       const ytdSales = s.ytd;
       const priorYtd = s.prior;
       const target   = priorYtd;
@@ -216,6 +228,7 @@ router.get('/accounts', async (req, res) => {
         salesRep:       c.salesRep || '',
         ytdSales:       +ytdSales.toFixed(2),
         priorYtd:       +priorYtd.toFixed(2),
+        monthGoal:      +s.monthGoal.toFixed(2),
         target:         +target.toFixed(2),
         pctToTarget:    +pctToTarget.toFixed(4),
         daysSinceOrder: daysSince,
