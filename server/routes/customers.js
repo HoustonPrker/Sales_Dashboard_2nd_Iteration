@@ -21,6 +21,19 @@ const custDetailCache = {};  // { [custNo]: { data, ts } }
 const custOrdersCache = {};  // { [custNo]: { data, ts } }
 const custMtdCache    = {};  // { [custNo]: { data, ts } }
 
+// ── Best-seller item set — 30-min TTL ────────────────────────
+const bsCache = { set: null, ts: 0 };
+const BS_TTL  = 30 * 60 * 1000;
+async function getBestSellerSet() {
+  if (bsCache.set && Date.now() - bsCache.ts < BS_TTL) return bsCache.set;
+  const items = await fetchAllPagesPar(
+    `/api/v1/Items?filter=profCod1:eq:Y&fields=itemNo&pageSize=500`
+  ).catch(() => []);
+  const s = new Set(items.map(i => (i.itemNo || '').trim().toUpperCase()));
+  bsCache.set = s; bsCache.ts = Date.now();
+  return s;
+}
+
 // ── Leaderboard cache (15-minute TTL) ────────────────────────
 const leaderboardCache = { data: null, ts: 0 };
 const LEADERBOARD_TTL  = 15 * 60 * 1000;
@@ -369,7 +382,7 @@ router.get('/order-lines/:ticketNo', async (req, res) => {
   }
 });
 
-// ── GET /proxy/order-detail/:ticketNo ────────────────────────
+// ── GET /proxy/order-detail/:ticketNo?custNo= ────────────────
 router.get('/order-detail/:ticketNo', async (req, res) => {
   try {
     const key   = req.params.ticketNo;
@@ -378,8 +391,9 @@ router.get('/order-detail/:ticketNo', async (req, res) => {
     if (!r.ok) return res.status(r.status).json({ error: 'Order not found' });
     const body = await r.json();
     const raw  = body.data || body;
-    const lines = (raw.lineItems || []).map(l => ({
-      itemNo:      l.itemNo      || '',
+
+    const baseLines = (raw.lineItems || []).map(l => ({
+      itemNo:      (l.itemNo || '').trim(),
       description: l.description || '',
       qty:         parseFloat(l.quantity  || l.qty    || 0),
       unitPrice:   parseFloat(l.price     || 0),
@@ -388,16 +402,67 @@ router.get('/order-detail/:ticketNo', async (req, res) => {
     })).filter(l => l.itemNo);
 
     const headerTotal = parseFloat(raw.total || raw.Total || 0);
-    const calcTotal   = lines.reduce((s, l) => s + l.extPrice, 0);
+    const calcTotal   = baseLines.reduce((s, l) => s + l.extPrice, 0);
+    const orderDate   = (raw.businessDate || raw.BusinessDate || '').slice(0, 10);
+
+    // ── Optional enrichment when custNo is provided ───────────
+    const custNo = (req.query.custNo || raw.custNo || raw.CustNo || '').trim();
+    let lines = baseLines;
+    let priorOrderTotal = 0;
+
+    if (custNo && orderDate) {
+      const custNoEnc = encodeURIComponent(custNo);
+      // 365 days before the order date (day before order as upper bound)
+      const orderDateObj = new Date(orderDate + 'T00:00:00Z');
+      const dayBeforeObj = new Date(orderDateObj);
+      dayBeforeObj.setUTCDate(dayBeforeObj.getUTCDate() - 1);
+      const dayBefore  = dayBeforeObj.toISOString().slice(0, 10);
+      const yearBefore = new Date(dayBeforeObj);
+      yearBefore.setUTCFullYear(yearBefore.getUTCFullYear() - 1);
+      const yearBeforeStr = yearBefore.toISOString().slice(0, 10);
+
+      const [bsSet, custLines, priorTickets] = await Promise.all([
+        getBestSellerSet(),
+        // Customer line-items purchased in the 365-day window before this order
+        fetchAllPagesPar(
+          `/api/v1/Customers/${custNoEnc}/line-items?filter=businessDate:gte:${yearBeforeStr},businessDate:lte:${dayBefore}&compact=true&fields=itemNo&pageSize=2000`
+        ).catch(() => []),
+        // Customer tickets in same window — used to find the most recent prior order
+        fetchAllPages(
+          `/api/v1/pos/ticket-history?filter=custNo:eq:${custNoEnc},BusinessDate:gte:${yearBeforeStr},BusinessDate:lte:${dayBefore}&fields=TicketNo,Total,BusinessDate&pageSize=200`
+        ).catch(() => []),
+      ]);
+
+      const priorPurchaseSet = new Set(
+        custLines.map(l => (l.itemNo || '').trim().toUpperCase()).filter(Boolean)
+      );
+
+      // Most recent ticket before this order
+      const sortedPrior = priorTickets
+        .filter(t => (t.BusinessDate || t.businessDate || '').slice(0, 10) < orderDate)
+        .sort((a, b) =>
+          (b.BusinessDate || b.businessDate || '').localeCompare(a.BusinessDate || a.businessDate || '')
+        );
+      priorOrderTotal = sortedPrior.length > 0
+        ? +(parseFloat(sortedPrior[0].Total || sortedPrior[0].total || 0)).toFixed(2)
+        : 0;
+
+      lines = baseLines.map(l => ({
+        ...l,
+        isBestSeller: bsSet.has(l.itemNo.toUpperCase()),
+        isRepeat:     priorPurchaseSet.has(l.itemNo.toUpperCase()),
+      }));
+    }
 
     res.json({
-      ticketNo: raw.ticketNo  || raw.TicketNo  || key,
-      date:     (raw.businessDate || raw.BusinessDate || '').slice(0, 10),
-      custNo:   raw.custNo    || raw.CustNo    || '',
-      custName: raw.custName  || raw.CustName  || '',
-      rep:      raw.salesRep  || raw.SalesRep  || '',
-      storeNo:  raw.storeNo   || raw.StoreNo   || '',
-      total:    +(headerTotal || calcTotal).toFixed(2),
+      ticketNo:        raw.ticketNo  || raw.TicketNo  || key,
+      date:            orderDate,
+      custNo:          raw.custNo    || raw.CustNo    || custNo,
+      custName:        raw.custName  || raw.CustName  || '',
+      rep:             raw.salesRep  || raw.SalesRep  || '',
+      storeNo:         raw.storeNo   || raw.StoreNo   || '',
+      total:           +(headerTotal || calcTotal).toFixed(2),
+      priorOrderTotal,
       lines,
     });
   } catch (e) {
