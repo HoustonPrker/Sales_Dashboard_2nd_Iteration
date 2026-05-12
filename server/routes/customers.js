@@ -74,16 +74,22 @@ router.get('/reps', async (req, res) => {
       }));
 
     // Step 2: check each user for at least 1 customer (all in parallel, pageSize=1)
+    // Try both the full ID (CGONZ-ACT) and the base ID (CGONZ) since customer
+    // records may store either format.
     const checked = await Promise.all(
       activeUsers.map(async u => {
-        try {
-          const r = await doFetch('GET',
-            `/api/v1/Customers?filter=salesRep:eq:${encodeURIComponent(u.id)}&fields=custNo&pageSize=1`);
-          if (!r.ok) return null;
-          const b = await r.json();
-          const items = (b.data ?? (Array.isArray(b) ? b : b.Items ?? b.items ?? []));
-          return items.length > 0 ? u : null;
-        } catch (_) { return null; }
+        const baseId = u.id.replace(/-ACTIVE$|-ACT$/i, '');
+        for (const repId of [u.id, baseId]) {
+          try {
+            const r = await doFetch('GET',
+              `/api/v1/Customers?filter=salesRep:eq:${encodeURIComponent(repId)}&fields=custNo&pageSize=1`);
+            if (!r.ok) continue;
+            const b = await r.json();
+            const items = b.data ?? (Array.isArray(b) ? b : b.Items ?? b.items ?? []);
+            if (items.length > 0) return u;
+          } catch (_) {}
+        }
+        return null;
       })
     );
 
