@@ -58,23 +58,14 @@ function computeTier(pctToTarget, daysSince, ytdSales, priorYtd) {
 // We show only the -ACT variants so the picker maps 1:1 to active customer accounts.
 router.get('/reps', async (req, res) => {
   try {
-    // Fetch system users and all customers in parallel
-    const [usersRes, customers] = await Promise.all([
-      doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS,secCod:eq:SALES&fields=usrId,name&pageSize=500`),
-      fetchAllPages(`/api/v1/Customers?fields=salesRep&pageSize=200`),
-    ]);
-
-    // Build set of salesRep IDs that actually have at least one customer
-    const repsWithAccounts = new Set(
-      customers.map(c => (c.salesRep || '').trim().toUpperCase()).filter(Boolean)
-    );
-
-    const body = usersRes.ok ? await usersRes.json() : {};
+    // Fetch all KGS workgroup users — no secCod filter so CS staff are included
+    const r    = await doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS&fields=usrId,name&pageSize=500`);
+    const body = r.ok ? await r.json() : {};
     const rows = body.data || (Array.isArray(body) ? body : []);
     const reps = rows
       .filter(u => {
         const id = (u.usrId || '').toUpperCase();
-        return (id.endsWith('-ACT') || id.endsWith('-ACTIVE')) && repsWithAccounts.has(id);
+        return id.endsWith('-ACT') || id.endsWith('-ACTIVE');
       })
       .map(u => ({
         id:   (u.usrId || '').trim(),
