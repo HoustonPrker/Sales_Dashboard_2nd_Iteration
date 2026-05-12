@@ -369,6 +369,43 @@ router.get('/order-lines/:ticketNo', async (req, res) => {
   }
 });
 
+// ── GET /proxy/order-detail/:ticketNo ────────────────────────
+router.get('/order-detail/:ticketNo', async (req, res) => {
+  try {
+    const key   = req.params.ticketNo;
+    const tktNo = encodeURIComponent(key);
+    const r     = await doFetch('GET', `/api/v1/pos/ticket-history/${tktNo}`);
+    if (!r.ok) return res.status(r.status).json({ error: 'Order not found' });
+    const body = await r.json();
+    const raw  = body.data || body;
+    const lines = (raw.lineItems || []).map(l => ({
+      itemNo:      l.itemNo      || '',
+      description: l.description || '',
+      qty:         parseFloat(l.quantity  || l.qty    || 0),
+      unitPrice:   parseFloat(l.price     || 0),
+      unitCost:    parseFloat(l.unitCost  || l.cost   || 0),
+      extPrice:    parseFloat(l.extPrice  || l.extAmt || 0),
+    })).filter(l => l.itemNo);
+
+    const headerTotal = parseFloat(raw.total || raw.Total || 0);
+    const calcTotal   = lines.reduce((s, l) => s + l.extPrice, 0);
+
+    res.json({
+      ticketNo: raw.ticketNo  || raw.TicketNo  || key,
+      date:     (raw.businessDate || raw.BusinessDate || '').slice(0, 10),
+      custNo:   raw.custNo    || raw.CustNo    || '',
+      custName: raw.custName  || raw.CustName  || '',
+      rep:      raw.salesRep  || raw.SalesRep  || '',
+      storeNo:  raw.storeNo   || raw.StoreNo   || '',
+      total:    +(headerTotal || calcTotal).toFixed(2),
+      lines,
+    });
+  } catch (e) {
+    console.error('/proxy/order-detail error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── GET /proxy/mtd/:custNo — month-to-date sales ──────────────
 router.get('/mtd/:custNo', async (req, res) => {
   try {

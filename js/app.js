@@ -44,9 +44,19 @@ function switchTab(tab) {
 // Handle back/forward and direct hash links
 window.addEventListener('popstate', () => {
   const hash  = window.location.hash;
-  const match = hash.match(/[?&]cust=([^&]+)/);
-  if (match && dataReady) {
-    const custNo = decodeURIComponent(match[1]);
+  // Order detail: #/customer/KG12345/order/1565156
+  const orderMatch = hash.match(/^#\/customer\/([^\/]+)\/order\/([^?&]+)/);
+  if (orderMatch) {
+    const custNo   = decodeURIComponent(orderMatch[1]);
+    const ticketNo = decodeURIComponent(orderMatch[2]);
+    switchTab('item');
+    if (typeof loadOrderDetail === 'function') loadOrderDetail(custNo, ticketNo);
+    return;
+  }
+  // Customer account: #/customer?cust=KG12345
+  const custMatch = hash.match(/[?&]cust=([^&]+)/);
+  if (custMatch && dataReady) {
+    const custNo = decodeURIComponent(custMatch[1]);
     switchTab('item');
     if (typeof loadCustomerAccount === 'function') loadCustomerAccount(custNo);
   }

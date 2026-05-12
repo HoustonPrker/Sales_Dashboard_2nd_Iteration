@@ -28,7 +28,6 @@ async function loadCustomerAccount(custNo) {
   caDrill        = null;
   caCatSort      = { col: 'description', dir: 'asc' };
   caConversation = [];
-  Object.keys(caOrderLinesCache).forEach(k => delete caOrderLinesCache[k]);
 
   window.location.hash = `#/customer?cust=${encodeURIComponent(custNo)}`;
 
@@ -1633,107 +1632,38 @@ function caCheckEmailDraft(fullText, bubbleEl) {
 
 // ── Order History ─────────────────────────────────────────────
 
-const caOrderLinesCache = {}; // ticketNo → lines[]
-
 function buildOrderHistory(orders) {
   if (!orders.length) return '<div style="padding:16px;color:#9ca3af;font-size:14px">No order history found.</div>';
 
   const sorted = [...orders].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 5);
-  const rows = sorted.map((o, idx) => {
-    const date    = (o.date || '').slice(0, 10);
-    const amt     = fmt$(parseFloat(o.amount || 0));
-    const items   = o.itemCount ? `${o.itemCount} items` : '';
-    const safeIdx = idx; // use index as stable key to avoid special-char issues
-    const linesId = `order-lines-${safeIdx}`;
-    const tktEsc  = (o.ticketNo || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-    return `<tr class="order-hdr-row" style="cursor:pointer" data-tkt="${tktEsc}" data-lid="${linesId}">
-      <td style="font-size:13px;color:#6b7280;width:18px;text-align:center;padding-right:4px">
-        <span class="order-toggle-icon" style="color:#9ca3af;font-size:10px">▶</span>
-      </td>
+  const rows = sorted.map(o => {
+    const date   = (o.date || '').slice(0, 10);
+    const amt    = fmt$(parseFloat(o.amount || 0));
+    const items  = o.itemCount ? `${o.itemCount} items` : '';
+    const tktEsc = (o.ticketNo || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+    const custEsc = (caCustNo || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,"\\'");
+    const tktJs  = (o.ticketNo || '').replace(/'/g,"\\'");
+    return `<tr class="order-hdr-row"
+      onclick="loadOrderDetail('${custEsc}','${tktJs}')"
+      style="cursor:pointer;transition:background 0.12s"
+      onmouseover="this.style.background='#f0f4f8'" onmouseout="this.style.background=''">
       <td style="font-size:13px;color:#6b7280">${date}</td>
-      <td style="font-family:monospace;font-size:12px;color:#3d5a80;font-weight:600">${o.ticketNo || '—'}</td>
+      <td style="font-family:monospace;font-size:12px;color:#3d5a80;font-weight:600">${tktEsc}</td>
       <td style="font-size:13px">${items}</td>
       <td class="num-ctr" style="font-weight:600">${amt}</td>
-    </tr>
-    <tr id="${linesId}" style="display:none">
-      <td colspan="5" style="padding:0;background:#f8f9fb;border-bottom:2px solid #e5e7eb"></td>
+      <td style="font-size:12px;color:#9ca3af;text-align:right;padding-right:12px">View →</td>
     </tr>`;
   }).join('');
 
-  const html = `<div class="inv-wrap" style="max-height:500px;overflow-y:auto;border-top:1px solid #f3f4f6">
+  return `<div class="inv-wrap" style="max-height:500px;overflow-y:auto;border-top:1px solid #f3f4f6">
     <table class="data-table" id="ca-orders-table">
       <thead><tr>
-        <th style="width:18px"></th>
-        <th style="color:#fff">Date</th><th style="color:#fff">Ticket #</th><th style="color:#fff">Items</th><th class="num-ctr" style="color:#fff">Total</th>
+        <th>Date</th><th>Ticket #</th><th>Items</th>
+        <th class="num-ctr">Total</th><th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;
-  // Wire delegation after render (next tick)
-  setTimeout(() => {
-    const tbl = document.getElementById('ca-orders-table');
-    if (tbl) tbl.addEventListener('click', e => {
-      const row = e.target.closest('.order-hdr-row');
-      if (!row) return;
-      toggleOrderLines(row.dataset.tkt, row.dataset.lid, row);
-    });
-  }, 0);
-  return html;
-}
-
-async function toggleOrderLines(ticketNo, linesRowId, hdrRow) {
-  const row    = document.getElementById(linesRowId);
-  const toggle = hdrRow ? hdrRow.querySelector('.order-toggle-icon') : null;
-  if (!row) return;
-
-  const isOpen = row.style.display !== 'none';
-  if (isOpen) {
-    row.style.display = 'none';
-    if (toggle) toggle.textContent = '▶';
-    return;
-  }
-
-  row.style.display = 'table-row';
-  if (toggle) toggle.textContent = '▼';
-  const td = row.querySelector('td');
-
-  // Use cache if available
-  if (caOrderLinesCache[ticketNo]) {
-    td.innerHTML = buildLinesTable(caOrderLinesCache[ticketNo]);
-    return;
-  }
-
-  td.innerHTML = '<div style="padding:10px 16px;color:#9ca3af;font-size:13px">Loading line items…</div>';
-
-  try {
-    const resp  = await fetch(`/proxy/order-lines/${encodeURIComponent(ticketNo)}`);
-    const lines = resp.ok ? await resp.json() : [];
-    caOrderLinesCache[ticketNo] = lines;
-    td.innerHTML = buildLinesTable(lines);
-  } catch (e) {
-    td.innerHTML = `<div style="padding:10px 16px;color:#dc2626;font-size:13px">Error: ${e.message}</div>`;
-  }
-}
-
-function buildLinesTable(lines) {
-  if (!lines.length) return '<div style="padding:10px 16px;color:#9ca3af;font-size:13px">No line items found.</div>';
-  const rows = lines.map(l => `<tr>
-    <td style="font-family:monospace;font-size:11px;color:#3d5a80;font-weight:600;padding:6px 12px;white-space:nowrap">${l.itemNo || '—'}</td>
-    <td style="font-size:12px;padding:6px 12px">${l.description || '—'}</td>
-    <td class="num-ctr" style="font-size:12px;padding:6px 12px">${l.qty || '—'}</td>
-    <td class="num-ctr" style="font-size:12px;padding:6px 12px">${l.unitPrice > 0 ? fmt$(l.unitPrice) : '—'}</td>
-    <td class="num-ctr" style="font-size:12px;font-weight:600;padding:6px 12px">${l.extPrice > 0 ? fmt$(l.extPrice) : '—'}</td>
-  </tr>`).join('');
-  return `<table style="width:100%;border-collapse:collapse;font-size:12px">
-    <thead><tr style="background:#f1f5f9">
-      <th style="text-align:left;padding:5px 12px;font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Item #</th>
-      <th style="text-align:left;padding:5px 12px;font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Description</th>
-      <th style="text-align:right;padding:5px 12px;font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Qty</th>
-      <th style="text-align:right;padding:5px 12px;font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Unit $</th>
-      <th style="text-align:right;padding:5px 12px;font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Ext $</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
 }
 
 
