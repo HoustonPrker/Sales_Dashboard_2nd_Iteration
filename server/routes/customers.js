@@ -9,7 +9,7 @@
 
 const express      = require('express');
 const router       = express.Router();
-const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP, MONTHLY_GROWTH_GOAL_PCT } = require('../lib/api');
+const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP, MONTHLY_GROWTH_GOAL_PCT, pyMonthGlobalCache } = require('../lib/api');
 const categoryCache = require('../lib/category-cache');
 
 // ── In-memory cache keyed by rep (5-minute TTL) ───────────────
@@ -20,6 +20,8 @@ const CACHE_TTL     = 5 * 60 * 1000;
 const custDetailCache = {};  // { [custNo]: { data, ts } }
 const custOrdersCache = {};  // { [custNo]: { data, ts } }
 const custMtdCache    = {};  // { [custNo]: { data, ts } }
+
+// pyMonthGlobalCache is imported from lib/api.js — shared with overview.js
 
 // ── Best-seller item set — 30-min TTL ────────────────────────
 const bsCache = { set: null, ts: 0 };
@@ -172,9 +174,19 @@ router.get('/accounts', async (req, res) => {
     const pyEnd     = `${yr - 1}-${mm}-${dd}`;
     const repTicketFilter = rep ? `SalesRep:eq:${encodeURIComponent(rep)},` : '';
 
-    const pyMonthStart = `${yr - 1}-${mm}-01`;
+    const pyMonthStart   = `${yr - 1}-${mm}-01`;
     // Last day of the full prior-year same month (not today's day last year)
-    const pyMonthEnd   = new Date(yr - 1, parseInt(mm, 10), 0).toISOString().slice(0, 10);
+    const pyMonthEnd     = new Date(yr - 1, parseInt(mm, 10), 0).toISOString().slice(0, 10);
+    const pyMonthCacheKey = `${yr - 1}-${mm}`;
+
+    // pyMonthTickets: fetch WITHOUT SalesRep filter — tickets carry the historical rep
+    // at order time, not the current account owner, so a SalesRep filter silently drops
+    // accounts that transferred between reps. Scope to the current rep via custNo join below.
+    const pyMonthTicketsPromise = (pyMonthGlobalCache[pyMonthCacheKey] && Date.now() - pyMonthGlobalCache[pyMonthCacheKey].ts < CACHE_TTL)
+      ? Promise.resolve(pyMonthGlobalCache[pyMonthCacheKey].data)
+      : fetchAllPagesPar(
+          `/api/v1/pos/ticket-history?filter=BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=CustNo,Total&pageSize=500`
+        ).then(data => { pyMonthGlobalCache[pyMonthCacheKey] = { data, ts: Date.now() }; return data; });
 
     const t1 = Date.now();
     const [customers, cyTickets, pyTickets, pyMonthTickets] = await Promise.all([
@@ -189,10 +201,7 @@ router.get('/accounts', async (req, res) => {
       fetchAllPages(
         `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${pyStart},BusinessDate:lte:${pyEnd}&fields=CustNo,Total&pageSize=500`
       ),
-      // PY same month tickets — used for per-account monthly goal (matches customer account page)
-      fetchAllPages(
-        `/api/v1/pos/ticket-history?filter=${repTicketFilter}BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=CustNo,Total&pageSize=500`
-      ),
+      pyMonthTicketsPromise,
     ]);
     console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY / ${pyMonthTickets.length} pyMonth tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
 

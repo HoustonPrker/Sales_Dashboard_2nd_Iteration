@@ -121,9 +121,15 @@ function aggregateLineItems(lines) {
   return byCust;
 }
 
+// Shared prior-year month ticket cache — keyed by 'YYYY-MM', shared across all routes.
+// Tickets carry the historical salesRep at write time, not the current account owner,
+// so callers must NOT filter by rep here; scope to current accounts via custNo join instead.
+const pyMonthGlobalCache = {};
+
 module.exports = {
   doFetch, fetchAllPages, fetchAllPagesPar, authHeaders,
   baseItemNo, ytdDateRange, calcCadence, aggregateLineItems,
   routeTimer,
   SALES_REP, API_BASE, API_KEY, MONTHLY_GROWTH_GOAL_PCT,
+  pyMonthGlobalCache,
 };

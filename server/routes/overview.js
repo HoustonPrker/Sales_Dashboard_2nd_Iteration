@@ -12,7 +12,7 @@
 
 const express = require('express');
 const router  = express.Router();
-const { doFetch, fetchAllPages, routeTimer, SALES_REP, MONTHLY_GROWTH_GOAL_PCT } = require('../lib/api');
+const { doFetch, fetchAllPages, fetchAllPagesPar, routeTimer, SALES_REP, MONTHLY_GROWTH_GOAL_PCT, pyMonthGlobalCache } = require('../lib/api');
 
 // 5-minute cache keyed by rep
 const overviewCache = {};
@@ -138,18 +138,26 @@ router.get('/rep-overview', async (req, res) => {
     const pyYtdStart = `${yr - 1}-01-01`;
     const pyYtdEnd   = `${yr - 1}-${mm}-${dd}`;
 
-    const repEnc = encodeURIComponent(rep);
+    const repEnc   = encodeURIComponent(rep);
+    const pyMonthCacheKey = `${yr - 1}-${mm}`;
+
+    // pyMonthTickets: use shared global cache (no SalesRep filter — same logic as /proxy/accounts).
+    // Scope to this rep's current accounts via custNo join below.
+    const pyMonthAllPromise = (pyMonthGlobalCache[pyMonthCacheKey] && Date.now() - pyMonthGlobalCache[pyMonthCacheKey].ts < CACHE_TTL)
+      ? Promise.resolve(pyMonthGlobalCache[pyMonthCacheKey].data)
+      : fetchAllPagesPar(
+          `/api/v1/pos/ticket-history?filter=BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=CustNo,Total&pageSize=500`
+        ).then(data => { pyMonthGlobalCache[pyMonthCacheKey] = { data, ts: Date.now() }; return data; });
 
     // Phase 1 — fire all independent fetches in parallel
-    const [cyDays, pyMonthTickets, pyYtdDays, mtdTickets] = await Promise.all([
+    const repFilter = `filter=salesRep:eq:${repEnc}&`;
+    const [cyDays, repCustomers, pyYtdDays, mtdTickets, pyMonthAllTickets] = await Promise.all([
       // CY YTD daily rows (for avg ticket/lines)
       fetchAllPages(
         `/api/v1/sales-analysis/by-sales-rep?filter=salesRep:eq:${repEnc},postDate:gte:${ytdStart},postDate:lte:${today}&fields=postDate,ticketCount,saleSubTotal,saleLines&pageSize=200`
       ),
-      // PY full same month — ticket-history Total matches /proxy/accounts monthGoal field
-      fetchAllPages(
-        `/api/v1/pos/ticket-history?filter=SalesRep:eq:${repEnc},BusinessDate:gte:${pyMonthStart},BusinessDate:lte:${pyMonthEnd}&fields=Total&pageSize=500`
-      ),
+      // Current customer list — needed to scope pyMonth tickets to this rep's accounts
+      fetchAllPages(`/api/v1/Customers?${repFilter}fields=custNo&pageSize=200`),
       // PY YTD daily rows (for avg ticket/lines prior year)
       fetchAllPages(
         `/api/v1/sales-analysis/by-sales-rep?filter=salesRep:eq:${repEnc},postDate:gte:${pyYtdStart},postDate:lte:${pyYtdEnd}&fields=postDate,ticketCount,saleSubTotal,saleLines&pageSize=200`
@@ -158,14 +166,17 @@ router.get('/rep-overview', async (req, res) => {
       fetchAllPages(
         `/api/v1/pos/ticket-history?filter=SalesRep:eq:${repEnc},BusinessDate:gte:${mtdStart},BusinessDate:lte:${today}&fields=TicketNo,Total,SaleLines,CustPoNo,BusinessDate&pageSize=200`
       ),
+      pyMonthAllPromise,
     ]);
 
     // ── Year run rate ─────────────────────────────────────────
     const { elapsed, total: bdTotal, rate: yearRunRate } = computeYearRunRate(now);
 
-    // ── Monthly goal = PY full same month sum(Total) × growth multiplier ─
-    // Matches /proxy/accounts per-customer monthGoal formula exactly.
-    const pyMonthRaw = pyMonthTickets.reduce((s, t) => s + (parseFloat(t.Total || t.total) || 0), 0);
+    // ── Monthly goal — filter global pyMonth tickets to this rep's current accounts ─
+    const repCustSet = new Set(repCustomers.map(c => (c.custNo || '').trim()).filter(Boolean));
+    const pyMonthRaw = pyMonthAllTickets
+      .filter(t => repCustSet.has((t.CustNo || t.custNo || '').trim()))
+      .reduce((s, t) => s + (parseFloat(t.Total || t.total) || 0), 0);
     const monthGoal  = +(pyMonthRaw * (1 + MONTHLY_GROWTH_GOAL_PCT)).toFixed(2);
 
     // ── MTD from CY daily rows ────────────────────────────────

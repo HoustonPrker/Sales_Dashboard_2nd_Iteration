@@ -110,9 +110,12 @@ function renderOverviewKpis() {
 
   const totalAcctsFmt = totalAccounts.toLocaleString();
 
-  const pill = (label, value, sub, valueStyle) => `
+  // Tooltip text for Monthly Goal — update this constant to refine wording
+  const MONTHLY_GOAL_TOOLTIP = `Monthly Goal = sum of prior-year same-month sales across your ${totalAccounts} currently-assigned accounts × (1 + growth factor). Includes all sales to these accounts regardless of which rep entered the order at the time.`;
+
+  const pill = (label, value, sub, valueStyle, tooltip) => `
     <div class="mgr-pill">
-      <div class="mgr-pill-label">${label}</div>
+      <div class="mgr-pill-label" style="display:flex;align-items:center;gap:4px">${label}${tooltip ? `<span title="${tooltip.replace(/"/g, '&quot;')}" style="cursor:help;font-size:10px;opacity:0.6;line-height:1;flex-shrink:0">ⓘ</span>` : ''}</div>
       <div class="mgr-pill-value" style="${valueStyle || ''}">${value}</div>
       ${sub ? `<div class="mgr-pill-sub">${sub}</div>` : ''}
     </div>`;
@@ -139,7 +142,7 @@ function renderOverviewKpis() {
             </div>
             ${pill('Total Accounts',  totalAcctsFmt,         'all rep accounts')}
             ${pill('Total YTD Sales', fmt$(totalYtd),         'current year to date')}
-            ${pill('Monthly Goal',    fmt$(totalMonthGoal),   'prior yr same month')}
+            ${pill('Monthly Goal',    fmt$(totalMonthGoal),   'prior yr same month', '', MONTHLY_GOAL_TOOLTIP)}
             ${pill('MTD Sales',       fmt$(d.monthly.mtd),    `${d.monthly.remainingBusinessDays} biz days left`)}
             ${pill('MTD %',           mtdPct + '%',           'of monthly goal')}
           </div>
