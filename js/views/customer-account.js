@@ -1035,9 +1035,16 @@ function renderItemDrill() {
     : `<span style="background:rgba(220,38,38,0.10);color:#dc2626;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700">I</span>`;
 
   const itemLink = itemNo =>
-    `<a href="https://www.kellisgifts.com/shop?q=${encodeURIComponent(itemNo)}" target="_blank" rel="noopener"
-       style="font-family:monospace;font-weight:600;color:#3d5a80;text-decoration:none"
-       onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${itemNo}</a>`;
+    `<span style="display:inline-flex;align-items:center;gap:5px">
+      <a href="https://www.kellisgifts.com/shop?q=${encodeURIComponent(itemNo)}" target="_blank" rel="noopener"
+         style="font-family:monospace;font-weight:600;color:#3d5a80;text-decoration:none"
+         onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${itemNo}</a>
+      <a onclick="switchTab('category');ipOpenItem('${itemNo}')" title="View item performance"
+         style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;background:#e0f2fe;border-radius:3px;cursor:pointer;flex-shrink:0;text-decoration:none"
+         onmouseover="this.style.background='#bae6fd'" onmouseout="this.style.background='#e0f2fe'">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#0369a1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      </a>
+    </span>`;
 
   // Sort the active list
   const { col, dir } = caDrillSort;
