@@ -367,7 +367,7 @@ function renderCA(cust, catData, mtd, orders) {
   const chgCls   = pctChange === null ? '' : pctChange >= 0 ? 'vel-up' : 'vel-down';
   const chgStr   = pctChange !== null ? (pctChange >= 0 ? '+' : '') + (pctChange * 100).toFixed(1) + '%' : '—';
 
-  const runRateFill = Math.min(runRate * 100, 100).toFixed(1);
+  const runRateFill = Math.min(parseFloat(monthRunRatePct), 100).toFixed(1);
   const mtdPctColor = mtdPctOfGoal === null ? '#fff' : parseFloat(mtdPctOfGoal) >= 100 ? '#86efac' : parseFloat(mtdPctOfGoal) >= 70 ? '#fcd34d' : '#fca5a5';
   const daysSinceColor = daysSince === null ? '#fff' : daysSince <= 14 ? '#86efac' : daysSince <= 30 ? '#fcd34d' : '#fca5a5';
 
@@ -469,12 +469,12 @@ function renderCA(cust, catData, mtd, orders) {
               <div class="mgr-pill-sub">Current year to date</div>
             </div>
             <div class="mgr-pill mgr-pill-runrate">
-              <div class="mgr-pill-label">Run Rate</div>
-              <div class="mgr-pill-value">${runRatePct}%</div>
+              <div class="mgr-pill-label">Month Run Rate</div>
+              <div class="mgr-pill-value">${monthRunRatePct}%</div>
               <div class="mgr-runrate-bar-track" style="margin:4px 0 2px">
                 <div class="mgr-runrate-bar-fill" style="width:${runRateFill}%"></div>
               </div>
-              <div class="mgr-pill-sub">of year elapsed</div>
+              <div class="mgr-pill-sub">${_moElapsed} of ${_moTotal} business days</div>
             </div>
             <div class="mgr-pill">
               <div class="mgr-pill-label">Prior Prior Year</div>
