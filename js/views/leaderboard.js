@@ -104,19 +104,46 @@ const LB_STYLES = `
   #leaderboard-panel .lb-podium {
     display: grid;
     grid-template-columns: 1fr 1.2fr 1fr;
-    gap: 12px;
+    gap: 16px;
     padding: 0 40px 28px;
     align-items: end;
+    max-width: 1320px;
+    margin: 0 auto;
+    box-sizing: border-box;
   }
   #leaderboard-panel .lb-podium-box {
     padding: 24px 20px 20px;
-    border-radius: 4px;
+    border-radius: 6px;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
+    position: relative;
+    overflow: hidden;
+  }
+  #leaderboard-panel .lb-podium-inner {
+    position: relative;
+    z-index: 1;
+  }
+  #leaderboard-panel .lb-ghost-rank {
+    position: absolute;
+    top: -12px;
+    right: 14px;
+    font-family: var(--serif);
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    pointer-events: none;
+    z-index: 0;
+    user-select: none;
+  }
+  #leaderboard-panel .lb-podium-crown {
+    font-size: 22px;
+    line-height: 1;
+    margin-bottom: 4px;
+    display: block;
   }
   #leaderboard-panel .lb-podium-rank {
-    font-family: var(--serif);
+    font-family: var(--mono);
     font-size: 10px;
     letter-spacing: 0.18em;
     text-transform: uppercase;
@@ -126,21 +153,31 @@ const LB_STYLES = `
     font-family: var(--serif);
     font-weight: 700;
     line-height: 1.1;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
     color: var(--ink);
   }
   #leaderboard-panel .lb-podium-figure {
     font-family: var(--serif);
     font-weight: 700;
     line-height: 1;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
+    letter-spacing: -0.02em;
+  }
+  #leaderboard-panel .lb-podium-subtitle {
+    font-family: var(--mono);
+    font-style: italic;
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 10px;
+    line-height: 1.4;
   }
   #leaderboard-panel .lb-podium-meta {
     font-family: var(--mono);
     font-style: italic;
     font-size: 11px;
     color: var(--muted);
-    line-height: 1.5;
+    line-height: 1.6;
+    opacity: 0.85;
   }
   #leaderboard-panel .lb-table-wrap {
     padding: 0 40px 40px;
@@ -270,18 +307,35 @@ function renderLBLayout(data) {
   if (!panel) return;
 
   const { awards, podium, standings, currentMonthLabel, lastMonthLabel,
-          totalAccounts, repCount, lastMonthTerritoryRevenue, updatedAt } = data;
+          totalAccounts, repCount, lastMonthTerritoryRevenue, updatedAt,
+          businessDays } = data;
 
   const updated = updatedAt
     ? new Date(updatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
     : '';
 
+  const bdPct    = businessDays ? Math.round(businessDays.pctElapsed) : null;
+  const bdNote   = bdPct !== null
+    ? `${bdPct}% through the business month · ${businessDays.elapsed} of ${businessDays.total} days elapsed`
+    : '';
   panel.innerHTML = `
     ${renderLBHeader(updated)}
-    ${renderLBMasthead(awards, lastMonthLabel)}
-    ${renderLBStatStrip(awards, lastMonthLabel, lastMonthTerritoryRevenue, totalAccounts, repCount)}
-    <div class="lb-section-kicker">${currentMonthLabel} — Race in Progress</div>
-    ${renderLBPodium(podium, currentMonthLabel)}
+
+    <!-- ── April: finalized award section ── -->
+    <div style="background:#fdf6e3;border:1px solid #f0e4c8;border-radius:4px;margin:0 24px;padding:0 0 4px">
+      ${renderLBMasthead(awards, lastMonthLabel)}
+      ${renderLBStatStrip(awards, lastMonthLabel, lastMonthTerritoryRevenue, totalAccounts, repCount)}
+    </div>
+
+    <!-- ── May: live race ── -->
+    <div style="margin-top:56px;padding:0 40px 12px">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:0.20em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Current Race</div>
+      <div style="font-family:var(--serif);font-size:26px;font-weight:700;letter-spacing:-0.02em;color:var(--ink);margin-bottom:6px">${currentMonthLabel} — Race in Progress</div>
+      <div style="font-family:var(--serif);font-style:italic;font-size:14px;color:var(--ink-soft);margin-bottom:0">${bdNote ? `The race for ${currentMonthLabel}'s Salesperson of the Month · ${bdNote}` : `The race for ${currentMonthLabel}'s Salesperson of the Month`}</div>
+      <hr style="border:none;border-bottom:2px solid var(--ink);margin:16px 0 0">
+    </div>
+
+    ${renderLBPodium(podium, businessDays)}
     <div class="lb-section-kicker" style="margin-top:4px">Full Standings · ${currentMonthLabel}</div>
     ${renderLBStandings(standings)}`;
 }
@@ -303,13 +357,13 @@ function renderLBHeader(updated) {
 
 // ── Masthead ──────────────────────────────────────────────────
 
-function renderLBMasthead(awards, currentMonthLabel) {
+function renderLBMasthead(awards, lastMonthLabel) {
   const sotm = awards?.sotm;
 
   if (!sotm) {
     return `
       <div style="padding:32px 40px 20px">
-        <div class="lb-kicker">Salesperson of the Month · ${currentMonthLabel} · In Progress</div>
+        <div class="lb-kicker">Salesperson of the Month · ${lastMonthLabel} · Final Results</div>
         <div class="lb-deck" style="font-style:normal;color:var(--muted)">
           No eligible reps — no monthly goals are set. Award requires a monthly goal to be configured.
         </div>
@@ -317,22 +371,14 @@ function renderLBMasthead(awards, currentMonthLabel) {
       </div>`;
   }
 
-  const monthOnly = currentMonthLabel.split(' ')[0]; // "May"
-  const kicker    = `Salesperson of the Month · ${currentMonthLabel} · Race in Progress`;
-  const headline  = `${sotm.repName} is Leading ${monthOnly}`;
-
-  let deck;
-  if (sotm.allUnderGoal) {
-    deck = `Tough month across the board — ${sotm.repName} is closest to goal so far, currently ${lbMoney(Math.abs(sotm.overGoal))} under target · ${lbMoney(sotm.sales)} closed against a ${lbMoney(sotm.goal)} monthly goal · winner declared at month end`;
-  } else {
-    deck = `${sotm.repName} leads the pack — up ${lbMoney(sotm.overGoal, { sign: true })} over goal · ${lbMoney(sotm.sales)} closed against a ${lbMoney(sotm.goal)} monthly target · winner declared at month end`;
-  }
+  const monthOnly = lastMonthLabel.split(' ')[0];
+  const kicker    = `🏆 Salesperson of the Month · ${lastMonthLabel} · Final Results`;
+  const headline  = `${sotm.repName} Won ${monthOnly}`;
 
   return `
     <div style="padding:32px 40px 20px">
       <div class="lb-kicker">${kicker}</div>
       <div class="lb-headline">${headline}</div>
-      <div class="lb-deck">${deck}</div>
       <hr class="lb-rule">
     </div>`;
 }
@@ -372,7 +418,7 @@ function renderLBStatStrip(awards, lastMonthLabel, territoryRev, totalAccounts, 
 
 // ── Podium ────────────────────────────────────────────────────
 
-function renderLBPodium(podium, currentMonthLabel) {
+function renderLBPodium(podium, businessDays) {
   if (!podium || !podium.length) {
     return `
       <div style="padding:0 40px 28px;font-family:var(--mono);font-size:12px;color:var(--muted);font-style:italic">
@@ -380,40 +426,97 @@ function renderLBPodium(podium, currentMonthLabel) {
       </div>`;
   }
 
-  // Display order: 2nd left, 1st center, 3rd right
-  const configs = [
-    { rank: 1, label: 'First Place',  bgVar: '--gold-bg',   borderVar: '--gold',   colorVar: '--gold',   height: 260, nameSize: 28, figSize: 42 },
-    { rank: 2, label: 'Second',       bgVar: '--silver-bg', borderVar: '--silver', colorVar: '--silver', height: 220, nameSize: 22, figSize: 34 },
-    { rank: 3, label: 'Third',        bgVar: '--bronze-bg', borderVar: '--bronze', colorVar: '--bronze', height: 200, nameSize: 22, figSize: 34 },
-  ];
-
   const repByRank = {};
   podium.forEach((r, i) => { repByRank[i + 1] = r; });
+
+  const first  = repByRank[1];
+  const second = repByRank[2];
+
+  // Lead indicator for 1st place
+  let leadStr = '';
+  if (first && second && first.paceScore !== null && second.paceScore !== null) {
+    const lead = +(first.paceScore - second.paceScore).toFixed(1);
+    if (lead >= 0.5)      leadStr = ` · +${lead} pt lead`;
+    else if (lead > 0)    leadStr = ' · narrow lead';
+  }
+
+  const configs = {
+    1: {
+      label:     'First Place',
+      crown:     true,
+      minHeight: 280,
+      marginTop: 0,
+      ghostSize: 220,
+      ghostColor:'rgba(180, 83, 9, 0.18)',
+      nameSize:  28,
+      figSize:   52,
+      accentClr: '#92400e',
+      rankClr:   '#b45309',
+      style:     'background:linear-gradient(180deg,#fde68a 0%,#fcd34d 100%);border:3px solid #f59e0b;box-shadow:0 8px 20px -8px rgba(245,158,11,0.4)',
+    },
+    2: {
+      label:     'Second Place',
+      crown:     false,
+      minHeight: 220,
+      marginTop: 30,
+      ghostSize: 180,
+      ghostColor:'rgba(71, 85, 105, 0.15)',
+      nameSize:  22,
+      figSize:   38,
+      accentClr: '#334155',
+      rankClr:   '#57534e',
+      style:     'background:linear-gradient(180deg,#f1f5f9 0%,#e2e8f0 100%);border:2px solid #94a3b8',
+    },
+    3: {
+      label:     'Third Place',
+      crown:     false,
+      minHeight: 180,
+      marginTop: 50,
+      ghostSize: 180,
+      ghostColor:'rgba(146, 64, 14, 0.18)',
+      nameSize:  22,
+      figSize:   38,
+      accentClr: '#9a3412',
+      rankClr:   '#92400e',
+      style:     'background:linear-gradient(180deg,#fed7aa 0%,#fdba74 100%);border:2px solid #c2410c',
+    },
+  };
 
   const displayOrder = [2, 1, 3]; // left=2nd, center=1st, right=3rd
 
   const boxes = displayOrder.map(rank => {
-    const cfg = configs.find(c => c.rank === rank);
+    const cfg = configs[rank];
     const rep = repByRank[rank];
     if (!rep) return '<div></div>';
 
-    const overGoalStr = rep.currentMonthOver >= 0
-      ? `+${lbMoney(rep.currentMonthOver)}`
-      : `−${lbMoney(Math.abs(rep.currentMonthOver))}`;
-    const pctToGoal = rep.currentMonthGoal > 0
+    const pctVal = rep.currentMonthGoal > 0
       ? (rep.currentMonthSales / rep.currentMonthGoal * 100).toFixed(1) + '%'
       : '—';
 
+    const subtitle = rank === 1
+      ? `to goal${leadStr}`
+      : 'to goal';
+
+    const dollarCtx = lbMoney(rep.currentMonthSales);
+
+    const crownHtml = cfg.crown ? `<span class="lb-podium-crown">👑</span>` : '';
+
     return `
-      <div class="lb-podium-box" style="height:${cfg.height}px;background:var(${cfg.bgVar});border:${rank === 1 ? 2 : 1}px solid var(${cfg.borderVar})">
-        <div class="lb-podium-rank" style="color:var(${cfg.colorVar})">${cfg.label}</div>
-        <div class="lb-podium-name" style="font-size:${cfg.nameSize}px">${rep.repName}</div>
-        <div class="lb-podium-figure" style="font-size:${cfg.figSize}px;color:var(${cfg.colorVar})">${overGoalStr}</div>
-        <div class="lb-podium-meta">${lbMoney(rep.currentMonthSales)} sales · ${lbMoney(rep.currentMonthGoal)} goal · ${rep.accountCount} accounts</div>
+      <div class="lb-podium-box" style="min-height:${cfg.minHeight}px;margin-top:${cfg.marginTop}px;${cfg.style}">
+        <span class="lb-ghost-rank" style="font-size:${cfg.ghostSize}px;color:${cfg.ghostColor}">${rank}</span>
+        <div class="lb-podium-inner">
+          ${crownHtml}
+          <div class="lb-podium-rank" style="color:${cfg.rankClr}">${cfg.label}</div>
+          <div class="lb-podium-name" style="font-size:${cfg.nameSize}px">${rep.repName}</div>
+          <div class="lb-podium-figure" style="font-size:${cfg.figSize}px;color:${cfg.accentClr}">${pctVal}</div>
+          <div class="lb-podium-subtitle">${subtitle}</div>
+          <div class="lb-podium-meta">${dollarCtx}<br>${rep.accountCount} accounts</div>
+        </div>
       </div>`;
   });
 
-  return `<div class="lb-podium">${boxes.join('')}</div>`;
+  return `
+    <div class="lb-podium">${boxes.join('')}</div>`;
 }
 
 // ── Standings table ───────────────────────────────────────────
@@ -428,10 +531,6 @@ function renderLBStandings(standings) {
   const rows = standings.map(r => {
     const isYou = loggedInRep && r.repId.toUpperCase() === loggedInRep;
     const hasGoal = r.currentMonthGoal !== null;
-
-    const overGoalCell = hasGoal
-      ? `<span class="lb-money ${r.currentMonthOver >= 0 ? 'lb-good' : 'lb-danger'}">${r.currentMonthOver >= 0 ? '+' : '−'}${lbMoney(Math.abs(r.currentMonthOver))}</span>`
-      : `<span class="lb-meta">—</span>`;
 
     const pctGoalCell = hasGoal && r.currentMonthGoal > 0
       ? `<span class="lb-meta">${(r.currentMonthSales / r.currentMonthGoal * 100).toFixed(1)}%</span>`
@@ -455,7 +554,6 @@ function renderLBStandings(standings) {
           <span class="lb-rep-name">${r.repName}</span>${youTag}${noGoalTag}
         </td>
         <td style="text-align:right"><span class="lb-money">${lbMoney(r.currentMonthSales)}</span></td>
-        <td style="text-align:right">${overGoalCell}</td>
         <td style="text-align:right">${pctGoalCell}</td>
         <td style="text-align:right"><span class="lb-meta">${r.accountCount}</span></td>
         <td style="text-align:right"><span style="font-family:var(--mono);font-size:13px;font-weight:600;color:${hsClr}">${hs}</span></td>
@@ -471,7 +569,6 @@ function renderLBStandings(standings) {
             <th style="width:36px">#</th>
             <th>Rep</th>
             <th class="num">Month Sales</th>
-            <th class="num">$ Over Goal</th>
             <th class="num">% to Goal</th>
             <th class="num">Accounts</th>
             <th class="num">Health</th>

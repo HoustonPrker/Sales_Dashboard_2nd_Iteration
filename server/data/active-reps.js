@@ -18,10 +18,6 @@ const ACTIVE_SALES_REPS = [
   'CHARLESM-A',
   'MICHEL-ACT',
   'ANNAB-ACT',
-  'BRIANH-ACT',
-  'RROSEN-ACT',
-  'CGONZ-ACT',
-  'KRIGGS-ACT',
 ];
 
 // Set for O(1) membership checks

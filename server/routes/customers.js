@@ -13,6 +13,7 @@ const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, aggregateLineIte
 const categoryCache = require('../lib/category-cache');
 const { getActiveReps, isActiveRep } = require('../data/active-reps');
 const { classifyAccountHealth, computeTypicalInterval } = require('../utils/health-classification');
+const { monthBusinessDayContext, computePaceScore } = require('../utils/business-days');
 
 // ── In-memory cache keyed by rep (5-minute TTL) ───────────────
 const accountsCache = {};  // { [rep]: { data, ts } }
@@ -48,6 +49,12 @@ async function getBestSellerSet() {
 // ── Leaderboard cache (15-minute TTL) ────────────────────────
 const leaderboardCache = { data: null, ts: 0 };
 const LEADERBOARD_TTL  = 15 * 60 * 1000;
+
+// ── Leaderboard monthly-window caches ────────────────────────
+// Completed months never change — use 2-hour TTL.
+// Current month changes daily — use same 5-min CACHE_TTL.
+const lbMonthCache = {}; // keyed by 'start:end'
+const LB_HIST_TTL  = 2 * 60 * 60 * 1000; // 2 hours for completed months
 
 // ── Compute health tier ───────────────────────────────────────
 // Run rate: % of year elapsed, used to judge if account is pacing correctly.
@@ -727,32 +734,42 @@ router.get('/leaderboard', async (req, res) => {
     const pyLmStart = monthStart(lmY - 1, lmM);
     const pyLmEnd   = monthEnd(lmY - 1, lmM);
 
-    const ticketFetch = (start, end) =>
-      fetchAllPagesPar(`/api/v1/pos/ticket-history?filter=BusinessDate:gte:${start},BusinessDate:lte:${end}&fields=CustNo,Total&pageSize=500`);
+    // ticketFetch with optional cache (ttl=0 → no cache, ttl>0 → lbMonthCache)
+    const ticketFetch = (start, end, ttl = 0) => {
+      const key = `${start}:${end}`;
+      if (ttl > 0 && lbMonthCache[key] && Date.now() - lbMonthCache[key].ts < ttl) {
+        return Promise.resolve(lbMonthCache[key].data);
+      }
+      const p = fetchAllPagesPar(
+        `/api/v1/pos/ticket-history?filter=BusinessDate:gte:${start},BusinessDate:lte:${end}&fields=CustNo,Total&pageSize=500`
+      );
+      if (ttl > 0) p.then(d => { lbMonthCache[key] = { data: d, ts: Date.now() }; });
+      return p;
+    };
 
     const { ytdStart, ytdEnd, priorStart, priorEnd } = ytdDateRange();
     const cyKey = `${ytdStart}:${ytdEnd}`;
     const pyKey = `${priorStart}:${priorEnd}`;
 
-    // 1. All fetches in parallel (ticket caches shared with accounts route where keys match)
-    const [activeReps, allCustomers, cyTickets, pyTickets, cmTickets, lmTickets, pmTickets, pyCmTickets, pyLmTickets] = await Promise.all([
+    // 1. All fetches in parallel — users fetch moved here (was sequential before)
+    const [activeReps, allCustomers, cyTickets, pyTickets, cmTickets, lmTickets, pmTickets, pyCmTickets, pyLmTickets, usersRes] = await Promise.all([
       getActiveReps(),
-      fetchAllPages(`/api/v1/Customers?fields=custNo,salesRep,lastSaleDate&pageSize=200`),
+      fetchAllPagesPar(`/api/v1/Customers?fields=custNo,salesRep,lastSaleDate&pageSize=200`),
       cyYtdGlobalCache[cyKey] && Date.now() - cyYtdGlobalCache[cyKey].ts < CACHE_TTL
         ? Promise.resolve(cyYtdGlobalCache[cyKey].data)
         : ticketFetch(ytdStart, ytdEnd).then(d => { cyYtdGlobalCache[cyKey] = { data: d, ts: Date.now() }; return d; }),
       pyYtdGlobalCache[pyKey] && Date.now() - pyYtdGlobalCache[pyKey].ts < CACHE_TTL
         ? Promise.resolve(pyYtdGlobalCache[pyKey].data)
         : ticketFetch(priorStart, priorEnd).then(d => { pyYtdGlobalCache[pyKey] = { data: d, ts: Date.now() }; return d; }),
-      ticketFetch(cmStart, cmEnd),     // current month actual
-      ticketFetch(lmStart, lmEnd),     // last completed month actual
-      ticketFetch(pmStart, pmEnd),     // prior month actual (Most Improved denominator)
-      ticketFetch(pyCmStart, pyCmEnd), // prior year current month (goal base)
-      ticketFetch(pyLmStart, pyLmEnd), // prior year last month (goal base)
+      ticketFetch(cmStart,   cmEnd,   CACHE_TTL),   // current month — 5-min cache
+      ticketFetch(lmStart,   lmEnd,   LB_HIST_TTL), // last completed month — 2-hr cache
+      ticketFetch(pmStart,   pmEnd,   LB_HIST_TTL), // prior month — 2-hr cache
+      ticketFetch(pyCmStart, pyCmEnd, LB_HIST_TTL), // PY current month — 2-hr cache
+      ticketFetch(pyLmStart, pyLmEnd, LB_HIST_TTL), // PY last month — 2-hr cache
+      doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS&fields=usrId,name&pageSize=500`),
     ]);
 
-    // Resolve display names from NCR in one batch call, then build repMap
-    const usersRes = await doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS&fields=usrId,name&pageSize=500`);
+    // Build rep display name map
     const usersBody = usersRes.ok ? await usersRes.json() : {};
     const nameMap   = {};
     (usersBody.data || []).forEach(u => {
@@ -807,6 +824,10 @@ router.get('/leaderboard', async (req, res) => {
       d.accounts.push({ tier: computeTier(priorYtd > 0 ? ytdSales / priorYtd : 0, daysSince, ytdSales, priorYtd) });
     }
 
+    // 4a. Business-day context for current month (used by pace score)
+    const bdCtx = monthBusinessDayContext(now);
+    // bdCtx: { elapsed, total, pctElapsed }
+
     // 4. Compute per-rep stats including monthly goal (prior year × growth factor)
     const G = 1 + MONTHLY_GROWTH_GOAL_PCT;
     const repStats = Object.entries(repMap).map(([repId, repName]) => {
@@ -825,6 +846,14 @@ router.get('/leaderboard', async (req, res) => {
       // Most Improved: lm − pm (only if both have sales)
       const improvement = (d.lm > 0 && d.pm > 0) ? +(d.lm - d.pm).toFixed(2) : null;
 
+      // Pace score: percentage points ahead of / behind monthly pace
+      const paceScore  = computePaceScore(d.cm, cmGoal, bdCtx.elapsed, bdCtx.total);
+      const pctToGoal  = cmGoal > 0 ? +((d.cm / cmGoal) * 100).toFixed(2) : null;
+
+      // Award eligibility: goal must be set AND ≥ $5,000
+      const AWARD_FLOOR = 5000;
+      const awardEligible = cmGoal !== null && cmGoal >= AWARD_FLOOR;
+
       return {
         repId, repName,
         accountCount:    accounts.length,
@@ -834,6 +863,9 @@ router.get('/leaderboard', async (req, res) => {
         currentMonthSales: +d.cm.toFixed(2),
         currentMonthGoal:  cmGoal,
         currentMonthOver:  cmOver,
+        pctToGoal,
+        paceScore:         paceScore !== null ? +paceScore.toFixed(2) : null,
+        awardEligible,
         // Last completed month
         lastMonthSales:    +d.lm.toFixed(2),
         lastMonthGoal:     lmGoal,
@@ -847,27 +879,38 @@ router.get('/leaderboard', async (req, res) => {
     const eligibleReps = repStats.filter(r => r.accountCount > 0);
 
     // 5. Compute awards
-    // SOTM: current month in progress — highest (cmSales − cmGoal), reps with no goal excluded
-    const sotmCandidates = eligibleReps.filter(r => r.currentMonthGoal !== null);
-    sotmCandidates.sort((a, b) => b.currentMonthOver - a.currentMonthOver);
+    // SOTM: ranked by paceScore among award-eligible reps (goal set AND ≥ $5,000)
+    const sotmCandidates = eligibleReps.filter(r => r.awardEligible && r.paceScore !== null);
+    sotmCandidates.sort((a, b) => b.paceScore - a.paceScore);
     const sotmWinner = sotmCandidates[0] || null;
-    const allUnderGoal = sotmWinner !== null && sotmWinner.currentMonthOver < 0;
+    const allUnderGoal = sotmWinner !== null && sotmWinner.paceScore < 0;
 
     // Most Improved: highest (lm − pm), both months must have data
     const miCandidates = eligibleReps.filter(r => r.improvement !== null);
     miCandidates.sort((a, b) => b.improvement - a.improvement);
     const miWinner = miCandidates[0] || null;
 
-    // 6. Current-month podium (reps with goal only, ranked by currentMonthOver)
+    // 6. Current-month podium — award-eligible reps only, ranked by paceScore
     const podiumReps = eligibleReps
-      .filter(r => r.currentMonthGoal !== null && r.currentMonthSales > 0)
-      .sort((a, b) => b.currentMonthOver - a.currentMonthOver)
+      .filter(r => r.awardEligible && r.paceScore !== null)
+      .sort((a, b) => b.paceScore - a.paceScore)
       .slice(0, 3);
 
-    // 7. Full standings: all eligible reps, reps with goal ranked by overGoal, no-goal reps to bottom
+    // 7. Full standings:
+    //   Group A: award-eligible reps (goal ≥ $5k), sorted by paceScore desc
+    //   Group B: reps with goal < $5k (below floor), sorted by paceScore desc
+    //   Group C: no-goal reps, sorted by sales desc — always at bottom
+    const AWARD_FLOOR = 5000;
     const standings = [
-      ...eligibleReps.filter(r => r.currentMonthGoal !== null).sort((a, b) => b.currentMonthOver - a.currentMonthOver),
-      ...eligibleReps.filter(r => r.currentMonthGoal === null).sort((a, b) => b.currentMonthSales - a.currentMonthSales),
+      ...eligibleReps
+        .filter(r => r.awardEligible && r.paceScore !== null)
+        .sort((a, b) => b.paceScore - a.paceScore),
+      ...eligibleReps
+        .filter(r => !r.awardEligible && r.currentMonthGoal !== null && r.currentMonthGoal > 0 && r.paceScore !== null)
+        .sort((a, b) => b.paceScore - a.paceScore),
+      ...eligibleReps
+        .filter(r => r.currentMonthGoal === null || r.currentMonthGoal <= 0)
+        .sort((a, b) => b.currentMonthSales - a.currentMonthSales),
     ].map((r, i) => ({ ...r, standingsRank: i + 1 }));
 
     const payload = {
@@ -875,13 +918,21 @@ router.get('/leaderboard', async (req, res) => {
       currentMonthLabel: `${MONTHS[mm]} ${yr}`,
       lastMonthLabel:    `${MONTHS[lmM]} ${lmY}`,
       priorMonthLabel:   `${MONTHS[pmM]} ${pmY}`,
+      // Business-day context for the current month — used by frontend pace indicator
+      businessDays: {
+        elapsed:    bdCtx.elapsed,
+        total:      bdCtx.total,
+        pctElapsed: +bdCtx.pctElapsed.toFixed(2),
+      },
       awards: {
         sotm: sotmWinner ? {
           repId:        sotmWinner.repId,
           repName:      sotmWinner.repName,
+          paceScore:    sotmWinner.paceScore,
           overGoal:     sotmWinner.currentMonthOver,
           sales:        sotmWinner.currentMonthSales,
           goal:         sotmWinner.currentMonthGoal,
+          pctToGoal:    sotmWinner.pctToGoal,
           allUnderGoal,
           inProgress:   true,
         } : null,

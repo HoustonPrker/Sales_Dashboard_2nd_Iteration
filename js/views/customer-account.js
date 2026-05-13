@@ -40,41 +40,64 @@ async function loadCustomerAccount(custNo) {
 
   try {
     const enc = encodeURIComponent(custNo);
-    const [custResp, catResp, mtdResp, ordersResp] = await Promise.all([
+
+    // Fire orders in parallel immediately — don't await it yet
+    const ordersPromise = fetch(`/proxy/orders/${enc}`)
+      .then(r => r.ok ? r.json() : [])
+      .catch(() => []);
+
+    // Critical path: customer + categories + MTD (all fast)
+    const [custResp, catResp, mtdResp] = await Promise.all([
       fetch(`/proxy/customer/${enc}`),
       fetch(`/proxy/categories/${enc}`),
       fetch(`/proxy/mtd/${enc}`),
-      fetch(`/proxy/orders/${enc}`),
     ]);
 
-    const cust    = custResp.ok    ? await custResp.json()    : {};
-    const catData = catResp.ok     ? await catResp.json()     : [];
-    const mtd     = mtdResp.ok     ? await mtdResp.json()     : { total: 0, orderDays: 0 };
-    const orders  = ordersResp.ok  ? await ordersResp.json()  : [];
+    const cust    = custResp.ok ? await custResp.json() : {};
+    const catData = catResp.ok  ? await catResp.json()  : [];
+    const mtd     = mtdResp.ok  ? await mtdResp.json()  : { total: 0, orderDays: 0 };
 
-    renderCA(cust, catData, mtd, orders);
+    // Guard: user may have navigated away while we were fetching
+    if (caCustNo !== custNo) return;
+
+    // Render immediately with empty orders — order history shows loading state
+    renderCA(cust, catData, mtd, []);
     ensureAITab();
-    setTimeout(() => {
-      renderCACharts(catData, orders);
 
-      // Sync drill panel height to left table — left sizes to content, right matches
-      const catSec    = document.getElementById('ca-cat-section');
+    // Sync drill panel height
+    const syncDrillHeight = () => {
+      const catSec     = document.getElementById('ca-cat-section');
       const drillPanel = document.getElementById('ca-drill-panel');
       if (catSec && drillPanel) {
-        const syncH = () => {
-          const h = catSec.offsetHeight;
-          if (h > 0) drillPanel.style.height = h + 'px';
-        };
+        const syncH = () => { const h = catSec.offsetHeight; if (h > 0) drillPanel.style.height = h + 'px'; };
         syncH();
         if (window._caDrillObserver) window._caDrillObserver.disconnect();
         window._caDrillObserver = new ResizeObserver(syncH);
         window._caDrillObserver.observe(catSec);
       }
+    };
 
+    setTimeout(() => {
+      syncDrillHeight();
       const topCat = [...catData].filter(c => c.currentYtdAmt > 0).sort((a, b) => b.currentYtdAmt - a.currentYtdAmt)[0];
       if (topCat) openCategoryDrill(custNo, topCat.categoryCode, 'ytd');
     }, 0);
-    startAIPitch(cust, catData, mtd);
+
+    // Background: await orders, then fill in order history + charts + AI
+    ordersPromise.then(orders => {
+      if (caCustNo !== custNo) return; // navigated away
+      // Patch order history section in place
+      const ohWrap = document.getElementById('ca-order-history-wrap');
+      if (ohWrap) ohWrap.innerHTML = `
+        <div class="card-title">
+          Order History <span style="font-weight:400;color:#9ca3af;font-size:12px;text-transform:none">(${Math.min(orders.length, 5)} most recent)</span>
+        </div>
+        ${buildOrderHistory(orders)}
+      `;
+      renderCACharts(catData, orders);
+      startAIPitch(cust, catData, mtd);
+    });
+
   } catch (e) {
     const p = document.getElementById('customer-account-panel');
     if (p) p.innerHTML = `<div style="padding:40px;color:#dc2626">Error loading account: ${e.message}</div>`;
@@ -506,10 +529,12 @@ function renderCA(cust, catData, mtd, orders) {
 
     <!-- Order History (full width) -->
     <div class="card" style="margin-bottom:12px" id="ca-orders-card">
-      <div class="card-title">
-        Order History <span style="font-weight:400;color:#9ca3af;font-size:12px;text-transform:none">(${Math.min(orders.length, 5)} most recent)</span>
+      <div id="ca-order-history-wrap">
+        <div class="card-title">
+          Order History <span style="font-weight:400;color:#9ca3af;font-size:12px;text-transform:none">${orders.length ? `(${Math.min(orders.length, 5)} most recent)` : '<span style="font-style:italic">loading…</span>'}</span>
+        </div>
+        ${buildOrderHistory(orders)}
       </div>
-      ${buildOrderHistory(orders)}
     </div>
 
     <!-- AI Sales Assistant drawer (slides in from right) -->
@@ -1640,13 +1665,20 @@ function buildOrderHistory(orders) {
   if (!orders.length) return '<div style="padding:16px;color:#9ca3af;font-size:14px">No order history found.</div>';
 
   const sorted = [...orders].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 5);
+
+  const fmtDate = iso => {
+    if (!iso) return '—';
+    const d = iso.slice(0, 10);
+    return d.slice(5, 7) + '-' + d.slice(8, 10) + '-' + d.slice(0, 4);
+  };
+
   const rows = sorted.map(o => {
-    const date   = (o.date || '').slice(0, 10);
-    const amt    = fmt$(parseFloat(o.amount || 0));
-    const items  = o.itemCount ? `${o.itemCount} items` : '';
-    const tktEsc = (o.ticketNo || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+    const date    = fmtDate(o.date);
+    const amt     = fmt$(parseFloat(o.amount || 0));
+    const items   = o.itemCount ? `${o.itemCount} items` : '—';
+    const tktEsc  = (o.ticketNo || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
     const custEsc = (caCustNo || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,"\\'");
-    const tktJs  = (o.ticketNo || '').replace(/'/g,"\\'");
+    const tktJs   = (o.ticketNo || '').replace(/'/g,"\\'");
     return `<tr class="order-hdr-row"
       onclick="loadOrderDetail('${custEsc}','${tktJs}')"
       style="cursor:pointer;transition:background 0.12s"
@@ -1659,11 +1691,19 @@ function buildOrderHistory(orders) {
     </tr>`;
   }).join('');
 
+  const thTip = (label, html) =>
+    `<th><span style="display:inline-flex;align-items:center;gap:4px">${label}<span class="kpi-info-wrap col-tip-wrap"><span class="kpi-info-icon">i<span class="kpi-tooltip-box col-tip-box">${html}</span></span></span></span></th>`;
+  const thTipCtr = (label, html) =>
+    `<th class="num-ctr"><span style="display:inline-flex;align-items:center;gap:4px;justify-content:center">${label}<span class="kpi-info-wrap col-tip-wrap"><span class="kpi-info-icon">i<span class="kpi-tooltip-box col-tip-box">${html}</span></span></span></span></th>`;
+
   return `<div class="inv-wrap" style="max-height:500px;overflow-y:auto;border-top:1px solid #f3f4f6">
     <table class="data-table" id="ca-orders-table">
       <thead><tr>
-        <th>Date</th><th>Ticket #</th><th>Items</th>
-        <th class="num-ctr">Total</th><th></th>
+        ${thTip('Date',     '<strong>Order Date</strong><br>The business date the transaction<br>was entered in NCR (MM-DD-YYYY).')}
+        ${thTip('Ticket #', '<strong>Ticket Number</strong><br>NCR point-of-sale ticket ID.<br>Click any row to view line-item detail.')}
+        ${thTipCtr('Items', '<strong>Line Items</strong><br>Number of distinct product lines<br>on this order.')}
+        ${thTipCtr('Total', '<strong>Order Total</strong><br>Sale subtotal for this ticket<br>(pre-tax, from NCR SaleSubtotal).')}
+        <th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>

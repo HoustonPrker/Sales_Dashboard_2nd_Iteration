@@ -418,6 +418,10 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
 .kpi-tooltip-box strong { color: #fff; }
 .kpi-info-wrap:hover .kpi-tooltip-box { display: block; }
 
+/* Column header tooltips open downward so they don't clip above the table */
+.col-tip-wrap { display: inline-block; position: relative; margin-left: 3px; vertical-align: middle; }
+.col-tip-box  { bottom: auto; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); min-width: 260px; white-space: normal; }
+
 /* Year run rate pill */
 .mgr-runrate-bar-track {
   width: 100%;

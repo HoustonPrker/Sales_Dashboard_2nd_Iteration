@@ -222,13 +222,15 @@ function renderOverviewKpis() {
 
   const totalAcctsFmt = totalAccounts.toLocaleString();
 
-  // Tooltip text for Monthly Goal — update this constant to refine wording
-  const MONTHLY_GOAL_TOOLTIP = `Monthly Goal = sum of prior-year same-month sales across your ${totalAccounts} currently-assigned accounts × (1 + growth factor). Includes all sales to these accounts regardless of which rep entered the order at the time.`;
+  const MONTHLY_GOAL_TOOLTIP = `<strong>Basis:</strong> Prior-year same-month sales<br><strong>Accounts:</strong> ${totalAccounts} currently assigned<br><strong>Growth factor:</strong> +5% applied`;
 
+  // tooltip = HTML string shown in the dark kpi-tooltip-box on hover
   const pill = (label, value, sub, valueStyle, tooltip) => `
     <div class="mgr-pill">
-      <div class="mgr-pill-label" style="display:flex;align-items:center;gap:4px">${label}${tooltip ? `<span title="${tooltip.replace(/"/g, '&quot;')}" style="cursor:help;font-size:10px;opacity:0.6;line-height:1;flex-shrink:0">ⓘ</span>` : ''}</div>
-      <div class="mgr-pill-value" style="${valueStyle || ''}">${value}</div>
+      <div class="mgr-pill-label">${label}</div>
+      <div class="mgr-pill-value" style="${valueStyle || ''}">
+        ${tooltip ? `<span class="kpi-info-wrap">${value}<span class="kpi-info-icon">i<span class="kpi-tooltip-box">${tooltip}</span></span></span>` : value}
+      </div>
       ${sub ? `<div class="mgr-pill-sub">${sub}</div>` : ''}
     </div>`;
 
@@ -263,14 +265,29 @@ function renderOverviewKpis() {
           <div class="mgr-pill-row">
             ${pill('Daily Needed',    dailyNeeded > 0 ? fmt$(dailyNeeded) : '—', 'to close gap')}
             ${pill('Active Accounts', `${activeAccounts} <span style="opacity:0.55;font-size:14px;font-weight:500">/ ${totalAccounts}</span>`, `${activeAccPct}% ordered this month`)}
-            ${pill('Avg Ticket (CY)', fmt$(d.avg.ticketCurrent), 'current year YTD')}
-            ${pill('Avg Ticket (PY)', fmt$(d.avg.ticketPrior),
+            ${pill('Avg Ticket',
+              fmt$(d.avg.ticketCurrent),
               ticketChg !== null
                 ? (parseFloat(ticketChg) >= 0
-                    ? `<span class="mgr-chg-up">↑ ${ticketChg}% vs prior</span>`
-                    : `<span class="mgr-chg-down">↓ ${Math.abs(ticketChg)}% vs prior</span>`)
-                : 'no prior yr data')}
-            ${pill('Avg Lines (CY)',  d.avg.linesCurrent.toFixed(1), 'lines per ticket CY')}
+                    ? `<span class="mgr-chg-up">↑ ${ticketChg}% vs PY</span>`
+                    : `<span class="mgr-chg-down">↓ ${Math.abs(ticketChg)}% vs PY</span>`)
+                : 'no prior yr data',
+              '',
+              `<strong>CY avg ticket:</strong> ${fmt$(d.avg.ticketCurrent)}<br><strong>PY avg ticket:</strong> ${fmt$(d.avg.ticketPrior)}<br><strong>Change:</strong> ${ticketChg !== null ? (parseFloat(ticketChg) >= 0 ? '+' : '') + ticketChg + '%' : '—'}`)}
+            ${pill('% Invoiced',
+              d.pctInvoiced != null ? (d.pctInvoiced * 100).toFixed(1) + '%' : '—',
+              'of MTD sales on PO',
+              '',
+              `<strong>Invoiced sales:</strong> tickets with a customer PO<br><strong>Basis:</strong> MTD ticket totals`)}
+            ${pill('Avg Lines',
+              d.avg.linesCurrent.toFixed(1),
+              linesChg !== null
+                ? (parseFloat(linesChg) >= 0
+                    ? `<span class="mgr-chg-up">↑ ${linesChg}% vs PY</span>`
+                    : `<span class="mgr-chg-down">↓ ${Math.abs(linesChg)}% vs PY</span>`)
+                : 'no prior yr data',
+              '',
+              `<strong>CY avg lines:</strong> ${d.avg.linesCurrent.toFixed(1)}<br><strong>PY avg lines:</strong> ${d.avg.linesPrior != null ? d.avg.linesPrior.toFixed(1) : '—'}<br><strong>Change:</strong> ${linesChg !== null ? (parseFloat(linesChg) >= 0 ? '+' : '') + linesChg + '%' : '—'}`)}
             ${pill('Best Sellers on PO', bsPct + '%', `${totalBsUnits.toLocaleString()} of ${totalAllUnits.toLocaleString()} units`)}
           </div>
         </div>
@@ -302,7 +319,7 @@ function renderAccountsDonut() {
     type: 'doughnut',
     data: {
       labels,
-      datasets: [{ data: counts, backgroundColor: bgColors, borderColor: 'rgba(255,255,255,0.15)', borderWidth: 2 }]
+      datasets: [{ data: counts, backgroundColor: bgColors, borderColor: '#ffffff', borderWidth: 3 }]
     },
     options: {
       responsive: true,
@@ -404,25 +421,40 @@ function renderAccountsOverview() {
 
   // ── Table ─────────────────────────────────────────────────────
   const cols = [
-    { key: 'name',        label: 'Customer Name' },
-    { key: 'custNo',      label: 'Acct #',             cls: 'num-ctr' },
-    { key: 'state',       label: 'State',               cls: 'num-ctr' },
-    { key: 'tier',        label: 'Tier',                cls: 'num-ctr' },
-    { key: 'ytdSales',    label: 'YTD Sales',           cls: 'num-ctr' },
-    { key: 'target',      label: 'Target',              cls: 'num-ctr' },
-    { key: 'pctToTarget', label: '% to Target',         cls: 'num-ctr' },
-    { key: 'priorYtd',    label: 'Prior YTD',           cls: 'num-ctr' },
-    { key: 'pctChange',   label: '% Change',            cls: 'num-ctr' },
-    { key: 'bsPct',       label: 'BS %',                cls: 'num-ctr' },
-    { key: 'daysSince',   label: 'Days Since Order',    cls: 'num-ctr' },
-    { key: 'lastOrder',   label: 'Last Order Date',     cls: 'num-ctr' },
+    { key: 'name',        label: 'Customer Name',
+      tip: '<strong>Customer Name</strong><br>Legal business name as recorded in NCR.' },
+    { key: 'custNo',      label: 'Acct #',          cls: 'num-ctr',
+      tip: '<strong>Account Number</strong><br>NCR customer ID used to look up order history.' },
+    { key: 'state',       label: 'State',            cls: 'num-ctr',
+      tip: '<strong>State</strong><br>Billing state on the customer record.' },
+    { key: 'tier',        label: 'Health',           cls: 'num-ctr',
+      tip: '<strong>Health Tier</strong><br>Classified by 3 signals — worst signal wins.<br><strong>Critical:</strong> gone quiet or sales collapsed<br><strong>At Risk:</strong> late on orders or declining sales<br><strong>Attention:</strong> slowing cadence or behind pace<br><strong>Healthy:</strong> no warning signals<br>Hover any badge for signal detail.' },
+    { key: 'ytdSales',    label: 'YTD Sales',        cls: 'num-ctr',
+      tip: '<strong>Year-to-Date Sales</strong><br>Sum of all ticket totals from Jan 1 of the current year through today.' },
+    { key: 'target',      label: 'Target',           cls: 'num-ctr',
+      tip: '<strong>Sales Target</strong><br>Prior-year same-period sales (Jan 1 – today last year). Used as the pace benchmark for % to Target.' },
+    { key: 'pctToTarget', label: '% to Target',      cls: 'num-ctr',
+      tip: '<strong>% to Target</strong><br>Formula: YTD Sales ÷ Target<br>Shows how far along the customer is relative to their prior-year pace. 100% = matching last year exactly.' },
+    { key: 'priorYtd',    label: 'Prior YTD',        cls: 'num-ctr',
+      tip: '<strong>Prior Year-to-Date</strong><br>Sum of ticket totals for the same Jan 1 – today window one year ago. Same-period comparison to keep the YoY % meaningful mid-year.' },
+    { key: 'pctChange',   label: '% Change',         cls: 'num-ctr',
+      tip: '<strong>YoY % Change</strong><br>Formula: (YTD Sales − Prior YTD) ÷ Prior YTD<br>Positive = growing vs same period last year. Blank for new customers with no prior year data.' },
+    { key: 'bsPct',       label: 'BS %',             cls: 'num-ctr',
+      tip: '<strong>Best Seller %</strong><br>Formula: Best Seller units ÷ Total units (YTD)<br>Share of this year\'s unit volume made up of priority/best-seller items (flagged in NCR with profCod1 = Y).' },
+    { key: 'daysSince',   label: 'Days Since Order', cls: 'num-ctr',
+      tip: '<strong>Days Since Last Order</strong><br>Calendar days from the customer\'s most recent order date to today. Used by the Health Tier engine to detect ordering gaps.' },
+    { key: 'lastOrder',   label: 'Last Order Date',  cls: 'num-ctr',
+      tip: '<strong>Last Order Date</strong><br>Date of the most recent ticket in NCR for this customer.' },
   ];
 
   const thead = cols.map(c => {
-    const active = acctSortCol === c.key;
-    const icon   = active ? (acctSortDir === 'asc' ? '▲' : '▼') : '⇅';
-    const cls    = [c.cls || '', 'sort-th', active ? 'sort-active' : ''].filter(Boolean).join(' ');
-    return `<th class="${cls}" onclick="acctSortBy('${c.key}')">${c.label}<span class="sort-icon">${icon}</span></th>`;
+    const active  = acctSortCol === c.key;
+    const icon    = active ? (acctSortDir === 'asc' ? '▲' : '▼') : '⇅';
+    const cls     = [c.cls || '', 'sort-th', active ? 'sort-active' : ''].filter(Boolean).join(' ');
+    const tipHtml = c.tip
+      ? `<span class="kpi-info-wrap col-tip-wrap"><span class="kpi-info-icon">i<span class="kpi-tooltip-box col-tip-box">${c.tip}</span></span></span>`
+      : '';
+    return `<th class="${cls}" onclick="acctSortBy('${c.key}')">${c.label}${tipHtml}<span class="sort-icon">${icon}</span></th>`;
   }).join('');
 
   const tbody = list.map(a => {
@@ -458,7 +490,7 @@ function renderAccountsOverview() {
       <td class="num-ctr"><span class="${pctChangeCls}">${pctChangeArrow}</span>${pctChange !== null ? ' ' + pctChange + '%' : '—'}</td>
       <td class="num-ctr">${a.totalUnits > 0 ? (a.bsPct * 100).toFixed(1) + '%' : '—'}</td>
       <td class="num-ctr"><span class="${daysCls}">${daysStr}</span></td>
-      <td class="num-ctr">${a.lastOrderDate || '—'}</td>
+      <td class="num-ctr">${a.lastOrderDate ? a.lastOrderDate.slice(5,7) + '-' + a.lastOrderDate.slice(8,10) + '-' + a.lastOrderDate.slice(0,4) : '—'}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="12" style="padding:20px;color:#9ca3af;text-align:center">No accounts found.</td></tr>';
 
@@ -473,7 +505,7 @@ function renderAccountsOverview() {
                 <div class="mgr-pill"><div class="mgr-pill-label">${lbl}</div><div class="mgr-pill-value">—</div></div>`).join('')}
             </div>
             <div class="mgr-pill-row">
-              ${['Daily Needed','Active Accounts','Avg Ticket (CY)','Avg Ticket (PY)','Avg Lines (CY)','Best Sellers on PO'].map(lbl => `
+              ${['Daily Needed','Active Accounts','Avg Ticket','% Invoiced','Avg Lines','Best Sellers on PO'].map(lbl => `
                 <div class="mgr-pill"><div class="mgr-pill-label">${lbl}</div><div class="mgr-pill-value">—</div></div>`).join('')}
             </div>
           </div>
