@@ -196,8 +196,43 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 .num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Fira Code', monospace; }
 .num-ctr { text-align: center; font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Fira Code', monospace; }
 .data-table th.num-ctr { text-align: center; }
-.acct-grid-wrap { max-height: calc(100vh - 290px); overflow-y: auto; min-height: 200px; }
-.data-table tr.acct-totals-row td { position: sticky; bottom: 0; background: #f8fafc; color: #1a2332; font-weight: 700; font-size: 13px; border-top: 2px solid #e5e7eb; border-bottom: none; padding: 10px 14px; z-index: 2; }
+/* #tab-store is the vertical scroll container */
+#tab-store { overflow-y: auto; }
+.acct-grid-wrap { overflow: visible; min-height: 200px; }
+/* Horizontal scroll lives on an inner wrapper — overflow-y:clip avoids creating
+   a new vertical scroll container (which would break the sticky thead) */
+.acct-h-scroll { overflow-x: auto; overflow-y: clip; width: 100%; }
+/* Fixed-height, flex-layout headers for the accounts table */
+.acct-grid-wrap .data-table th { height: 46px; padding: 0; white-space: normal; vertical-align: middle; min-width: 52px; letter-spacing: 0.4px; position: sticky; top: 0; z-index: 4; background: #3d5a80; }
+.acct-grid-wrap .data-table th .th-inner { display: flex; align-items: center; height: 100%; padding: 0 6px 0 4px; gap: 3px; }
+.acct-grid-wrap .data-table th .th-label { flex: 1; min-width: 0; text-align: center; white-space: normal; line-height: 1.25; word-break: normal; overflow-wrap: normal; font-size: 13px; }
+.acct-grid-wrap .data-table th[data-col-id="name"] .th-label { text-align: left; }
+.acct-grid-wrap .data-table th .th-tail { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.acct-grid-wrap .data-table th .col-drag-handle { display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin: 0; font-size: 12px; opacity: 0.7; }
+.acct-grid-wrap .data-table th .sort-icon { font-size: 10px; opacity: 0.9; }
+/* ── Pinned Customer Name column ─────────────────────────────── */
+/* Header cell — sits at intersection of sticky-top + sticky-left */
+.acct-grid-wrap .data-table th[data-col-id="name"] {
+  position: sticky; left: 0; z-index: 5; background: #3d5a80;
+  box-shadow: 2px 0 6px rgba(0,0,0,0.10);
+}
+/* Data cells */
+.acct-grid-wrap .data-table tbody td.acct-pin-col {
+  position: sticky; left: 0; z-index: 2;
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: 2px 0 6px rgba(0,0,0,0.07);
+}
+.acct-grid-wrap .data-table tbody tr:hover td.acct-pin-col { background: #f0f4f8 !important; }
+/* Totals bar pinned cell */
+#acct-totals-bar td.acct-pin-col {
+  position: sticky; left: 0; z-index: 2; background: #dde4ee;
+  box-shadow: 2px 0 6px rgba(0,0,0,0.07);
+}
+.data-table tr.acct-totals-row { background: #dde4ee; }
+.data-table tr.acct-totals-row td { background: #dde4ee; color: #1a2332; font-weight: 700; font-size: 13px; border-top: 2px solid #b8c4d8; border-bottom: none; padding: 10px 14px; }
+#acct-totals-bar { position: fixed; bottom: 0; z-index: 200; overflow: hidden; box-shadow: 0 -2px 6px rgba(0,0,0,0.12); }
+#acct-totals-bar table { border-collapse: collapse; }
+.acct-grid-wrap { padding-bottom: 52px; }
 .data-table tr.acct-totals-row td .vel-up   { color: #059669; }
 .data-table tr.acct-totals-row td .vel-ss   { color: #d97706; }
 .data-table tr.acct-totals-row td .vel-down { color: #dc2626; }
@@ -242,6 +277,7 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 .acc-btn-primary:hover { background:#344d6e; }
 .acc-btn-secondary { background:#f1f5f9; color:#374151; border-color:#e2e8f0; }
 .acc-btn-secondary:hover { background:#e2e8f0; }
+.acc-section-divider { padding:6px 14px 4px; font-size:11px; font-weight:700; color:#9ca3af; text-transform:uppercase; letter-spacing:0.05em; border-top:1px solid #f1f5f9; margin-top:4px; }
 
 /* Column filter button in header */
 .col-filter-btn { display:inline-flex; align-items:center; justify-content:center; background:none; border:none; cursor:pointer; color:rgba(255,255,255,0.45); font-size:13px; padding:0 2px; margin-left:2px; border-radius:3px; line-height:1; vertical-align:middle; }

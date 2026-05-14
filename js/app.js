@@ -32,6 +32,19 @@ function switchTab(tab) {
   if (caBar) caBar.style.display = tab === 'item'     ? 'flex' : 'none';
   if (ipBar) ipBar.style.display = tab === 'category' ? 'flex' : 'none';
 
+  // Show/hide AI floating buttons
+  const caAiBtn   = document.getElementById('ca-ai-tab');
+  const acctAiBtn = document.getElementById('acct-ai-tab');
+  if (caAiBtn)   caAiBtn.style.display   = tab === 'item'  ? 'flex' : 'none';
+  if (acctAiBtn) acctAiBtn.style.display = tab === 'store' ? 'flex' : 'none';
+
+  // Close territory drawer when leaving store tab
+  if (tab !== 'store' && typeof closeTerritoryAIDrawer === 'function') closeTerritoryAIDrawer();
+
+  // Hide the fixed accounts totals bar when not on the accounts tab
+  const acctTotBar = document.getElementById('acct-totals-bar');
+  if (acctTotBar) acctTotBar.style.display = tab === 'store' ? 'block' : 'none';
+
   if (tab === 'store'       && dataReady) renderStoreView();
   if (tab === 'category'    && dataReady) renderItemPerformanceView();
   if (tab === 'leaderboard' && dataReady) renderLeaderboardView();

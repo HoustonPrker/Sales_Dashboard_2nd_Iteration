@@ -9,11 +9,12 @@
 
 const express      = require('express');
 const router       = express.Router();
-const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP, MONTHLY_GROWTH_GOAL_PCT, pyMonthGlobalCache } = require('../lib/api');
+const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP, pyMonthGlobalCache } = require('../lib/api');
+const { getAnnualGrowthPct, getMonthlyGrowthPct } = require('../lib/kellis-config');
 const categoryCache = require('../lib/category-cache');
 const { getActiveReps, isActiveRep } = require('../data/active-reps');
 const { classifyAccountHealth, computeTypicalInterval } = require('../utils/health-classification');
-const { monthBusinessDayContext, computePaceScore } = require('../utils/business-days');
+const { monthBusinessDayContext, computePaceScore, computeYearRunRate } = require('../utils/business-days');
 
 // ── In-memory cache keyed by rep (5-minute TTL) ───────────────
 const accountsCache = {};  // { [rep]: { data, ts } }
@@ -57,34 +58,39 @@ const lbMonthCache = {}; // keyed by 'start:end'
 const LB_HIST_TTL  = 2 * 60 * 60 * 1000; // 2 hours for completed months
 
 // ── Compute health tier ───────────────────────────────────────
-// Run rate: % of year elapsed, used to judge if account is pacing correctly.
+// Annual health — based on YTD pace vs prior year. Recency thresholds are
+// intentionally loose (60/90 days) so a monthly gap doesn't drag down annual health.
 function computeTier(pctToTarget, daysSince, ytdSales, priorYtd) {
   const now     = new Date();
   const dayOfYr = Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 86400000) + 1;
-  const runRate = dayOfYr / 365; // fraction of year elapsed
+  const runRate = dayOfYr / 365;
 
-  // Critical: no recent orders (90+ days) OR YTD down 50%+ vs prior
   if (daysSince >= 90) return 'Critical';
   if (priorYtd > 0 && ytdSales < priorYtd * 0.5) return 'Critical';
 
-  // At Risk: 45-90 days no order OR more than 25 pts below run-rate pace
-  if (daysSince >= 45) return 'AtRisk';
+  if (daysSince >= 60) return 'AtRisk';
   if (priorYtd > 0 && pctToTarget < (runRate - 0.25)) return 'AtRisk';
 
-  // No prior year target — base on recency only
   if (priorYtd === 0) {
-    if (daysSince <= 30 && ytdSales > 0) return 'Healthy';
-    if (daysSince <= 45) return 'Attention';
+    if (daysSince <= 45 && ytdSales > 0) return 'Healthy';
+    if (daysSince <= 60) return 'Attention';
     return 'AtRisk';
   }
 
-  // Healthy: ordered within 30 days AND on or near run-rate pace (within 10 pts)
-  if (daysSince <= 30 && pctToTarget >= (runRate - 0.10)) return 'Healthy';
+  if (pctToTarget < (runRate - 0.10)) return 'Attention';
+  return 'Healthy';
+}
 
-  // Attention: ordered within 30 days but behind pace, or 15-45 days but otherwise on track
-  if (daysSince <= 45) return 'Attention';
-
-  return 'AtRisk';
+// Monthly health — based on MTD sales pace vs expected (goal × % of month elapsed).
+function computeMonthTier(mtdSales, monthGoal, pctMonthElapsed) {
+  if (monthGoal <= 0) return 'Healthy';
+  if (pctMonthElapsed < 0.05) return 'Healthy'; // first ~1-2 days — too early to judge
+  const expected = monthGoal * pctMonthElapsed;
+  const pace = mtdSales / expected;
+  if (pace >= 0.85) return 'Healthy';
+  if (pace >= 0.65) return 'Attention';
+  if (pace >= 0.40) return 'AtRisk';
+  return 'Critical';
 }
 
 // ── GET /proxy/sales-reps/active — authoritative active rep list ──
@@ -180,8 +186,10 @@ router.get('/accounts', async (req, res) => {
     const dd     = String(now.getDate()).padStart(2, '0');
     const today  = `${yr}-${mm}-${dd}`;
     const ytdStart  = `${yr}-01-01`;
+    const mtdStart  = `${yr}-${mm}-01`;
     const pyStart   = `${yr - 1}-01-01`;
     const pyEnd     = `${yr - 1}-${mm}-${dd}`;
+    const pyMtdStart = `${yr - 1}-${mm}-01`;
     const repTicketFilter = rep ? `SalesRep:eq:${encodeURIComponent(rep)},` : '';
 
     const pyMonthStart   = `${yr - 1}-${mm}-01`;
@@ -226,7 +234,7 @@ router.get('/accounts', async (req, res) => {
     const t1 = Date.now();
     const [customers, cyTickets, pyTickets, pyMonthTickets, pyFullTickets] = await Promise.all([
       fetchAllPages(
-        `/api/v1/Customers?${repFilter}fields=custNo,name,state,salesRep,lastSaleDate&pageSize=200`
+        `/api/v1/Customers?${repFilter}fields=custNo,name,state,salesRep,lastSaleDate,categoryCode,termsCode,email1,phone1,discountPercent&pageSize=200`
       ),
       cyTicketsPromise,
       pyTicketsPromise,
@@ -242,18 +250,28 @@ router.get('/accounts', async (req, res) => {
     const bsPctData = {};
     await parallelLimit(customers.map(c => async () => {
       try {
-        const enc   = encodeURIComponent(c.custNo);
-        const items = await fetchAllPagesPar(
-          `/api/v1/Customers/${enc}/line-items?filter=businessDate:gte:${ytdStart},businessDate:lte:${today}&compact=true&fields=itemNo&pageSize=500`
-        );
+        const enc = encodeURIComponent(c.custNo);
+        const [cyItems, pyItems] = await Promise.all([
+          fetchAllPagesPar(
+            `/api/v1/Customers/${enc}/line-items?filter=businessDate:gte:${ytdStart},businessDate:lte:${today}&compact=true&fields=itemNo&pageSize=500`
+          ),
+          fetchAllPagesPar(
+            `/api/v1/Customers/${enc}/line-items?filter=businessDate:gte:${pyStart},businessDate:lte:${pyEnd}&compact=true&fields=itemNo&pageSize=500`
+          ),
+        ]);
         let bsUnits = 0, totalUnits = 0;
-        for (const l of items) {
+        for (const l of cyItems) {
           totalUnits += 1;
           if (bsSet.has((l.itemNo || '').trim().toUpperCase())) bsUnits += 1;
         }
-        bsPctData[c.custNo] = { bsUnits, totalUnits };
+        let pyBsUnits = 0, pyTotalUnits = 0;
+        for (const l of pyItems) {
+          pyTotalUnits += 1;
+          if (bsSet.has((l.itemNo || '').trim().toUpperCase())) pyBsUnits += 1;
+        }
+        bsPctData[c.custNo] = { bsUnits, totalUnits, pyBsUnits, pyTotalUnits };
       } catch (_) {
-        bsPctData[c.custNo] = { bsUnits: 0, totalUnits: 0 };
+        bsPctData[c.custNo] = { bsUnits: 0, totalUnits: 0, pyBsUnits: 0, pyTotalUnits: 0 };
       }
     }), 20);
     console.log(`  bsPct fetch done for ${customers.length} customers`);
@@ -265,20 +283,33 @@ router.get('/accounts', async (req, res) => {
 
     // 2. Aggregate ticket totals by custNo
     const salesMap = {};
+    const ensureEntry = c => { if (c) salesMap[c] = salesMap[c] || { ytd: 0, mtd: 0, prior: 0, priorMtd: 0, priorMonth: 0, monthGoal: 0 }; };
     for (const t of cyTickets) {
       const c = (t.CustNo || t.custNo || '').trim();
-      if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0, monthGoal: 0 };
-      if (c) salesMap[c].ytd += parseFloat(t.Total || t.total || 0);
+      ensureEntry(c);
+      if (!c) continue;
+      const amt = parseFloat(t.Total || t.total || 0);
+      salesMap[c].ytd += amt;
+      const d = (t.BusinessDate || t.businessDate || '').slice(0, 10);
+      if (d >= mtdStart) salesMap[c].mtd += amt;
     }
     for (const t of pyTickets) {
       const c = (t.CustNo || t.custNo || '').trim();
-      if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0, monthGoal: 0 };
-      if (c) salesMap[c].prior += parseFloat(t.Total || t.total || 0);
+      ensureEntry(c);
+      if (!c) continue;
+      const amt = parseFloat(t.Total || t.total || 0);
+      salesMap[c].prior += amt;
+      const d = (t.BusinessDate || t.businessDate || '').slice(0, 10);
+      if (d >= pyMtdStart) salesMap[c].priorMtd += amt;
     }
     for (const t of pyMonthTickets) {
       const c = (t.CustNo || t.custNo || '').trim();
-      if (c) salesMap[c] = salesMap[c] || { ytd: 0, prior: 0, monthGoal: 0 };
-      if (c) salesMap[c].monthGoal += parseFloat(t.Total || t.total || 0);
+      ensureEntry(c);
+      if (c) {
+        const amt = parseFloat(t.Total || t.total || 0);
+        salesMap[c].monthGoal  += amt;
+        salesMap[c].priorMonth += amt;
+      }
     }
 
     // 3. Build pyFull totals + per-customer order-date pool for health signals
@@ -309,11 +340,22 @@ router.get('/accounts', async (req, res) => {
     const dayOfYr  = Math.floor((now - new Date(yr, 0, 1)) / 86400000) + 1;
     const runRate  = dayOfYr / 365;
 
+    // Month elapsed % — used by computeMonthTier and month run rate
+    const monthBd         = monthBusinessDayContext(now);
+    const pctMonthElapsed = monthBd.pctElapsed / 100; // 0–1
+
+    // Annual run rate — weekday-based (Mon–Fri, excluding federal holidays)
+    const yearRr          = computeYearRunRate(now);
+    const pctYearElapsed  = yearRr.rate; // 0–1
+
     // 4. Build account records
     const accounts = customers.map(c => {
-      const s        = salesMap[c.custNo] || { ytd: 0, prior: 0, monthGoal: 0 };
-      const ytdSales = s.ytd;
-      const priorYtd = s.prior;
+      const s          = salesMap[c.custNo] || { ytd: 0, mtd: 0, prior: 0, priorMtd: 0, priorMonth: 0, monthGoal: 0 };
+      const ytdSales   = s.ytd;
+      const mtdSales   = s.mtd;
+      const priorYtd   = s.prior;
+      const priorMtd   = s.priorMtd;
+      const priorMonth = s.priorMonth;
       const target   = priorYtd;
 
       const pctToTarget = target > 0 ? ytdSales / target : (ytdSales > 0 ? 1 : 0);
@@ -338,25 +380,54 @@ router.get('/accounts', async (req, res) => {
 
       const bs = bsPctData[c.custNo] || { bsUnits: 0, totalUnits: 0 };
 
+      const yyyyMM          = `${yr}-${mm}`;
+      const monthlyG        = getMonthlyGrowthPct(yyyyMM);
+      const annualG         = getAnnualGrowthPct();
+      const monthGoalFinal  = +(s.monthGoal * (1 + monthlyG)).toFixed(2);
+      const pctToMonthGoal  = monthGoalFinal > 0 ? +(mtdSales / monthGoalFinal).toFixed(4) : 0;
+      const monthTier       = computeMonthTier(mtdSales, monthGoalFinal, pctMonthElapsed);
+
+      const annualGoal      = +(pyFullYear * (1 + annualG)).toFixed(2);
+      const pctToAnnualGoal = annualGoal > 0 ? +(ytdSales / annualGoal).toFixed(4) : 0;
+      const monthRunRate    = pctMonthElapsed > 0 ? +(mtdSales / pctMonthElapsed).toFixed(2) : 0;
+      const annualRunRate   = pctYearElapsed  > 0 ? +(ytdSales  / pctYearElapsed).toFixed(2)  : 0;
+
       return {
         custNo:         c.custNo,
         name:           c.name || '',
         state:          c.state || '',
         salesRep:       c.salesRep || '',
+        category:       (c.categoryCode || '').trim(),
+        termsCode:      (c.termsCode || '').trim(),
+        email:          (c.email1 || '').trim(),
+        phone:          (c.phone1 || '').trim(),
+        discount:       +(c.discountPercent || 0),
         ytdSales:       +ytdSales.toFixed(2),
+        mtdSales:       +mtdSales.toFixed(2),
         priorYtd:       +priorYtd.toFixed(2),
-        monthGoal:      +(s.monthGoal * (1 + MONTHLY_GROWTH_GOAL_PCT)).toFixed(2),
+        priorMtd:       +priorMtd.toFixed(2),
+        priorMonth:     +priorMonth.toFixed(2),
+        monthGoal:      monthGoalFinal,
+        annualGoal,
+        pctToMonthGoal,
+        pctToAnnualGoal,
+        monthRunRate,
+        annualRunRate,
         target:         +target.toFixed(2),
         pctToTarget:    +pctToTarget.toFixed(4),
         daysSinceOrder: daysSince,
         lastOrderDate:  lastDate,
-        tier,          // current classification (old rules) — pending diagnostic review
-        healthSignals, // new 3-signal classification — use after diagnostic approval
+        tier,
+        monthTier,
+        healthSignals,
         typicalIntervalDays,
         pyFullYear,
         bsUnits:        +bs.bsUnits.toFixed(0),
         totalUnits:     +bs.totalUnits.toFixed(0),
         bsPct:          bs.totalUnits > 0 ? +(bs.bsUnits / bs.totalUnits).toFixed(4) : 0,
+        pyBsUnits:      +(bs.pyBsUnits  || 0).toFixed(0),
+        pyTotalUnits:   +(bs.pyTotalUnits || 0).toFixed(0),
+        pyBsPct:        (bs.pyTotalUnits || 0) > 0 ? +((bs.pyBsUnits || 0) / bs.pyTotalUnits).toFixed(4) : 0,
       };
     });
 
@@ -829,7 +900,8 @@ router.get('/leaderboard', async (req, res) => {
     // bdCtx: { elapsed, total, pctElapsed }
 
     // 4. Compute per-rep stats including monthly goal (prior year × growth factor)
-    const G = 1 + MONTHLY_GROWTH_GOAL_PCT;
+    const lbYYYYMM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const G = 1 + getMonthlyGrowthPct(lbYYYYMM);
     const repStats = Object.entries(repMap).map(([repId, repName]) => {
       const d        = repData[repId] || {};
       const accounts = d.accounts || [];

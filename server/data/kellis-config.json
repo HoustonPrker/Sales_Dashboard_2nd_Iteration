@@ -1,0 +1,7 @@
+{
+  "annualGrowthPct": 0.10,
+  "defaultMonthlyGrowthPct": 0.05,
+  "monthlyGrowthPct": {
+    "2026-05": 0.058
+  }
+}

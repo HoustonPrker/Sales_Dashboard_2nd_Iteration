@@ -12,7 +12,8 @@
 
 const express = require('express');
 const router  = express.Router();
-const { doFetch, fetchAllPages, fetchAllPagesPar, routeTimer, SALES_REP, MONTHLY_GROWTH_GOAL_PCT, pyMonthGlobalCache } = require('../lib/api');
+const { doFetch, fetchAllPages, fetchAllPagesPar, routeTimer, SALES_REP, pyMonthGlobalCache } = require('../lib/api');
+const { getAnnualGrowthPct, getMonthlyGrowthPct } = require('../lib/kellis-config');
 const { countBusinessDays, computeYearRunRate, monthBusinessDayContext } = require('../utils/business-days');
 
 // 5-minute cache keyed by rep
@@ -102,7 +103,10 @@ router.get('/rep-overview', async (req, res) => {
     const pyMonthRaw = pyMonthAllTickets
       .filter(t => repCustSet.has((t.CustNo || t.custNo || '').trim()))
       .reduce((s, t) => s + (parseFloat(t.Total || t.total) || 0), 0);
-    const monthGoal  = +(pyMonthRaw * (1 + MONTHLY_GROWTH_GOAL_PCT)).toFixed(2);
+    const yyyyMM      = `${yr}-${mm}`;
+    const monthlyG    = getMonthlyGrowthPct(yyyyMM);
+    const annualG     = getAnnualGrowthPct();
+    const monthGoal  = +(pyMonthRaw * (1 + monthlyG)).toFixed(2);
 
     // ── MTD total — sum ticket-history Total (matches sales console) ─────
     const mtdTotal  = mtdTickets.reduce((s, t) => s + (parseFloat(t.Total || t.total) || 0), 0);
@@ -155,6 +159,8 @@ router.get('/rep-overview', async (req, res) => {
 
     const result = {
       yearRunRate,
+      annualGrowthPct:  annualG,
+      monthlyGrowthPct: monthlyG,
       businessDaysElapsed: elapsed,
       businessDaysTotal: bdTotal,
       monthly: {
