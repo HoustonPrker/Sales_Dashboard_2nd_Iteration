@@ -16,10 +16,16 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
+
+// ── Auth routes (no auth required) ───────────────────────────
+app.use('/proxy/auth', require('./routes/auth'));
+
+// ── Require auth for all other /proxy routes ──────────────────
+app.use('/proxy', require('./middleware/requireAuth'));
 
 // ── Routes ────────────────────────────────────────────────────
 app.use('/proxy', require('./routes/config'));
