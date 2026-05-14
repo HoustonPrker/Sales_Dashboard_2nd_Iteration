@@ -192,8 +192,12 @@ function renderOverviewKpis() {
   const activeAccPct = totalAccounts > 0 ? ((mtdActiveAccounts / totalAccounts) * 100).toFixed(0) : 0;
 
   // Defer mtdPct / mtdColor until totalMonthGoal is computed below
-  const totalYtd      = (accountsData || []).reduce((s, a) => s + a.ytdSales, 0);
-  const totalMonthGoal = (accountsData || []).reduce((s, a) => s + (a.monthGoal || 0), 0);
+  const totalYtd        = (accountsData || []).reduce((s, a) => s + a.ytdSales, 0);
+  const totalMonthGoal  = (accountsData || []).reduce((s, a) => s + (a.monthGoal || 0), 0);
+  const totalAnnualTarget = (accountsData || []).reduce((s, a) => s + ((a.pyFullYear || 0) * 1.05), 0);
+  const annualPctRatio  = totalAnnualTarget > 0 ? totalYtd / totalAnnualTarget : 0;
+  const annualPct       = (annualPctRatio * 100).toFixed(1);
+  const annualPctColor  = annualPctRatio >= 1.0 ? '#059669' : annualPctRatio >= 0.75 ? '#d97706' : '#dc2626';
   const mtdRatio     = totalMonthGoal > 0 ? d.monthly.mtd / totalMonthGoal : 0;
   const mtdPct       = (mtdRatio * 100).toFixed(1);
   const mtdColor     = mtdRatio >= 1.0 ? '#059669' : mtdRatio >= 0.75 ? '#d97706' : '#dc2626';
@@ -256,6 +260,7 @@ function renderOverviewKpis() {
               <div class="mgr-pill-sub">${d.businessDaysElapsed} of ${d.businessDaysTotal} days elapsed</div>
             </div>
 ${pill('Total YTD Sales', fmt$(totalYtd),         'current year to date')}
+            ${pill('% to Annual Target', `<span style="color:${annualPctColor}">${annualPct}%</span>`, fmt$(totalAnnualTarget) + ' goal', '', `<strong>Annual Target:</strong> prior full-year sales × 1.05 per account, summed<br><strong>% to Target:</strong> YTD Sales ÷ Annual Target<br><strong>Prior year:</strong> Jan 1 – Dec 31 last year`)}
             ${pill('Monthly Goal',    fmt$(totalMonthGoal),   'prior yr same month', '', MONTHLY_GOAL_TOOLTIP)}
             ${pill('MTD Sales',       fmt$(d.monthly.mtd),    `${d.monthly.remainingBusinessDays} biz days left`)}
             ${pill('MTD %',           mtdPct + '%',           'of monthly goal')}
@@ -501,7 +506,7 @@ function renderAccountsOverview() {
           <div style="min-width:240px;width:240px;padding:8px 20px 8px 4px;border-right:1px solid rgba(255,255,255,0.12);margin-right:20px;flex-shrink:0"></div>
           <div style="flex:1;display:flex;flex-direction:column;gap:8px;padding:4px 0">
             <div class="mgr-pill-row">
-              ${['Year Run Rate','Total YTD Sales','Monthly Goal','MTD Sales','MTD %'].map(lbl => `
+              ${['Year Run Rate','Total YTD Sales','% to Annual Target','Monthly Goal','MTD Sales','MTD %'].map(lbl => `
                 <div class="mgr-pill"><div class="mgr-pill-label">${lbl}</div><div class="mgr-pill-value">—</div></div>`).join('')}
             </div>
             <div class="mgr-pill-row">
