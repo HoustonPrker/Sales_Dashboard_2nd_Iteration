@@ -462,6 +462,35 @@ function renderAccountsOverview() {
     return `<th class="${cls}" onclick="acctSortBy('${c.key}')">${c.label}${tipHtml}<span class="sort-icon">${icon}</span></th>`;
   }).join('');
 
+  // ── Totals row ───────────────────────────────────────────────
+  const totYtd      = list.reduce((s, a) => s + a.ytdSales, 0);
+  const totTarget   = list.reduce((s, a) => s + (a.target || 0), 0);
+  const totPriorYtd = list.reduce((s, a) => s + (a.priorYtd || 0), 0);
+  const totBsUnits  = list.reduce((s, a) => s + (a.bsUnits || 0), 0);
+  const totAllUnits = list.reduce((s, a) => s + (a.totalUnits || 0), 0);
+
+  const totPctTgt    = totTarget   > 0 ? (totYtd / totTarget * 100).toFixed(1) + '%'       : '—';
+  const totPctTgtCls = totTarget   > 0 ? (totYtd / totTarget >= 1 ? 'vel-up' : totYtd / totTarget >= 0.75 ? 'vel-ss' : 'vel-down') : '';
+  const totPctChgVal = totPriorYtd > 0 ? ((totYtd - totPriorYtd) / totPriorYtd * 100).toFixed(1) : null;
+  const totPctChgCls = totPctChgVal !== null ? (parseFloat(totPctChgVal) >= 0 ? 'vel-up' : 'vel-down') : '';
+  const totPctChgArr = totPctChgVal !== null ? (parseFloat(totPctChgVal) >= 0 ? '↑' : '↓') : '';
+  const totBsPct     = totAllUnits  > 0 ? (totBsUnits / totAllUnits * 100).toFixed(1) + '%' : '—';
+  const totLabel     = acctTierFilter === 'All' ? `All ${list.length} accounts` : `${acctTierFilter.replace('AtRisk','At Risk')} (${list.length})`;
+
+  const tfoot = `<tfoot>
+    <tr class="acct-totals-row">
+      <td style="text-align:left;font-size:12px;opacity:0.75;font-weight:600">${totLabel}</td>
+      <td></td><td></td><td></td>
+      <td class="num-ctr">${fmt$(totYtd)}</td>
+      <td class="num-ctr">${totTarget > 0 ? fmt$(totTarget) : '—'}</td>
+      <td class="num-ctr"><span class="${totPctTgtCls}">${totPctTgt}</span></td>
+      <td class="num-ctr">${totPriorYtd > 0 ? fmt$(totPriorYtd) : '—'}</td>
+      <td class="num-ctr"><span class="${totPctChgCls}">${totPctChgArr}</span>${totPctChgVal !== null ? ' ' + totPctChgVal + '%' : '—'}</td>
+      <td class="num-ctr">${totBsPct}</td>
+      <td></td><td></td>
+    </tr>
+  </tfoot>`;
+
   const tbody = list.map(a => {
     const pctTgt = a.target > 0 ? (a.pctToTarget * 100).toFixed(1) + '%' : '—';
     const pctTgtCls = a.target > 0 ? (a.pctToTarget >= 1 ? 'vel-up' : a.pctToTarget >= 0.75 ? 'vel-ss' : 'vel-down') : '';
@@ -522,10 +551,11 @@ function renderAccountsOverview() {
       ${tierBtn('All')}${tierBtn('Healthy')}${tierBtn('Attention')}${tierBtn('AtRisk')}${tierBtn('Critical')}
     </div>
 
-    <div class="inv-wrap">
+    <div class="inv-wrap acct-grid-wrap">
       <table class="data-table">
         <thead><tr>${thead}</tr></thead>
         <tbody>${tbody}</tbody>
+        ${tfoot}
       </table>
     </div>`;
 
