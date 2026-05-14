@@ -180,15 +180,16 @@ function renderOverviewKpis() {
   if (!el || !acctOverviewData) return;
   const d = acctOverviewData;
 
-  const totalAccounts  = (accountsData || []).length;
-  const activeAccounts = d.monthly.activeAccounts;
+  const totalAccounts     = (accountsData || []).length;
+  const activeAccounts    = d.monthly.activeAccounts;      // 180-day unique CustNos
+  const mtdActiveAccounts = d.monthly.mtdActiveAccounts ?? 0;
 
   const runRatePct   = (d.yearRunRate * 100).toFixed(1);
   const totalBsUnits    = (accountsData || []).reduce((s, a) => s + (a.bsUnits    || 0), 0);
   const totalAllUnits   = (accountsData || []).reduce((s, a) => s + (a.totalUnits || 0), 0);
   const repBsPct        = totalAllUnits > 0 ? totalBsUnits / totalAllUnits : (d.bestSeller.pct || 0);
   const bsPct           = (repBsPct * 100).toFixed(1);
-  const activeAccPct = totalAccounts > 0 ? ((activeAccounts / totalAccounts) * 100).toFixed(0) : 0;
+  const activeAccPct = totalAccounts > 0 ? ((mtdActiveAccounts / totalAccounts) * 100).toFixed(0) : 0;
 
   // Defer mtdPct / mtdColor until totalMonthGoal is computed below
   const totalYtd      = (accountsData || []).reduce((s, a) => s + a.ytdSales, 0);
@@ -264,7 +265,7 @@ function renderOverviewKpis() {
           <!-- Row 2 — 6 pills -->
           <div class="mgr-pill-row">
             ${pill('Daily Needed',    dailyNeeded > 0 ? fmt$(dailyNeeded) : '—', 'to close gap')}
-            ${pill('Active Accounts', `${activeAccounts} <span style="opacity:0.55;font-size:14px;font-weight:500">/ ${totalAccounts}</span>`, `${activeAccPct}% ordered this month`)}
+            ${pill('Active Accounts', `${activeAccounts} <span style="opacity:0.55;font-size:14px;font-weight:500">/ ${totalAccounts}</span>`, `${activeAccPct}% ordered this month`, '', '<strong>Active account:</strong> at least one order in the last 180 days<br><strong>Sub-text:</strong> % of total accounts with an order so far this month')}
             ${pill('Avg Ticket',
               fmt$(d.avg.ticketCurrent),
               ticketChg !== null

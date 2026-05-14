@@ -41,6 +41,10 @@ router.get('/rep-overview', async (req, res) => {
     // MTD window
     const mtdStart = `${yr}-${mm}-01`;
 
+    // 180-day active-account window
+    const d180 = new Date(now); d180.setDate(d180.getDate() - 180);
+    const date180 = d180.toISOString().slice(0, 10);
+
     // Prior year same month — full month, fixed target (last day via Date arithmetic)
     const pyMonthStart = `${yr - 1}-${mm}-01`;
     const pyMonthEnd   = new Date(yr - 1, parseInt(mm, 10), 0).toISOString().slice(0, 10);
@@ -65,7 +69,7 @@ router.get('/rep-overview', async (req, res) => {
 
     // Phase 1 — fire all independent fetches in parallel
     const repFilter = `filter=salesRep:eq:${repEnc}&`;
-    const [cyDays, repCustomers, pyYtdDays, mtdTickets, pyMonthAllTickets] = await Promise.all([
+    const [cyDays, repCustomers, pyYtdDays, mtdTickets, pyMonthAllTickets, tickets180] = await Promise.all([
       // CY YTD daily rows (for avg ticket/lines)
       fetchAllPages(
         `/api/v1/sales-analysis/by-sales-rep?filter=salesRep:eq:${repEnc},postDate:gte:${ytdStart},postDate:lte:${today}&fields=postDate,ticketCount,saleSubTotal,saleLines&pageSize=200`
@@ -81,6 +85,10 @@ router.get('/rep-overview', async (req, res) => {
         `/api/v1/pos/ticket-history?filter=SalesRep:eq:${repEnc},BusinessDate:gte:${mtdStart},BusinessDate:lte:${today}&fields=TicketNo,Total,SaleLines,CustNo,CustPoNo,BusinessDate&pageSize=200`
       ),
       pyMonthAllPromise,
+      // 180-day window — unique CustNos for "active accounts" KPI
+      fetchAllPages(
+        `/api/v1/pos/ticket-history?filter=SalesRep:eq:${repEnc},BusinessDate:gte:${date180},BusinessDate:lte:${today}&fields=CustNo&pageSize=500`
+      ),
     ]);
 
     // ── Year run rate ─────────────────────────────────────────
@@ -104,9 +112,11 @@ router.get('/rep-overview', async (req, res) => {
     const gap = monthGoal - mtdTotal;
     const dailySalesNeeded = remainingBD > 0 && gap > 0 ? +(gap / remainingBD).toFixed(2) : 0;
 
-    // ── Active accounts this month (CustNo, not CustPoNo) ─────────────────
-    const activeCustNos  = new Set(mtdTickets.map(t => (t.CustNo || t.custNo || '').trim()).filter(Boolean));
-    const activeAccounts = activeCustNos.size;
+    // ── Active accounts — 180-day window and MTD ─────────────────────────
+    const mtdCustNosSet   = new Set(mtdTickets.map(t => (t.CustNo || t.custNo || '').trim()).filter(Boolean));
+    const mtdActiveAccounts  = mtdCustNosSet.size;
+    const active180CustNos   = new Set(tickets180.map(t => (t.CustNo || t.custNo || '').trim()).filter(Boolean));
+    const activeAccounts     = active180CustNos.size; // shown in KPI pill (180-day definition)
 
     // ── % Invoiced — tickets that carry a customer PO number ─────────────
     // A ticket with CustPoNo means the customer issued a PO; sale is invoiced/shipped.
@@ -151,6 +161,7 @@ router.get('/rep-overview', async (req, res) => {
         remainingBusinessDays: remainingBD,
         dailySalesNeeded,
         activeAccounts,
+        mtdActiveAccounts,
         totalAccounts,
       },
       avg: {
