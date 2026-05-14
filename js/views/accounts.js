@@ -255,8 +255,7 @@ function renderOverviewKpis() {
               <div class="mgr-pill-value">${runRatePct}%</div>
               <div class="mgr-pill-sub">${d.businessDaysElapsed} of ${d.businessDaysTotal} days elapsed</div>
             </div>
-            ${pill('Total Accounts',  totalAcctsFmt,         'all rep accounts')}
-            ${pill('Total YTD Sales', fmt$(totalYtd),         'current year to date')}
+${pill('Total YTD Sales', fmt$(totalYtd),         'current year to date')}
             ${pill('Monthly Goal',    fmt$(totalMonthGoal),   'prior yr same month', '', MONTHLY_GOAL_TOOLTIP)}
             ${pill('MTD Sales',       fmt$(d.monthly.mtd),    `${d.monthly.remainingBusinessDays} biz days left`)}
             ${pill('MTD %',           mtdPct + '%',           'of monthly goal')}
@@ -502,7 +501,7 @@ function renderAccountsOverview() {
           <div style="min-width:240px;width:240px;padding:8px 20px 8px 4px;border-right:1px solid rgba(255,255,255,0.12);margin-right:20px;flex-shrink:0"></div>
           <div style="flex:1;display:flex;flex-direction:column;gap:8px;padding:4px 0">
             <div class="mgr-pill-row">
-              ${['Year Run Rate','Total Accounts','Total YTD Sales','Monthly Goal','MTD Sales','MTD %'].map(lbl => `
+              ${['Year Run Rate','Total YTD Sales','Monthly Goal','MTD Sales','MTD %'].map(lbl => `
                 <div class="mgr-pill"><div class="mgr-pill-label">${lbl}</div><div class="mgr-pill-value">—</div></div>`).join('')}
             </div>
             <div class="mgr-pill-row">
