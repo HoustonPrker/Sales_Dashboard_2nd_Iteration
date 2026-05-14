@@ -289,7 +289,7 @@ function renderOverviewKpis() {
                 : 'no prior yr data',
               '',
               `<strong>CY avg lines:</strong> ${d.avg.linesCurrent.toFixed(1)}<br><strong>PY avg lines:</strong> ${d.avg.linesPrior != null ? d.avg.linesPrior.toFixed(1) : '—'}<br><strong>Change:</strong> ${linesChg !== null ? (parseFloat(linesChg) >= 0 ? '+' : '') + linesChg + '%' : '—'}`)}
-            ${pill('Best Sellers on PO', bsPct + '%', `${totalBsUnits.toLocaleString()} of ${totalAllUnits.toLocaleString()} units`)}
+            ${pill('Best Sellers on PO', bsPct + '%', `${totalBsUnits.toLocaleString()} of ${totalAllUnits.toLocaleString()} lines`, '', '<strong>Best Sellers on PO:</strong> order lines containing a best-seller item (profCod1=Y) ÷ total order lines YTD<br><strong>Basis:</strong> lines, not units — each line item counts once regardless of quantity')}
           </div>
         </div>
 

@@ -235,7 +235,8 @@ router.get('/accounts', async (req, res) => {
     ]);
     console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY / ${pyMonthTickets.length} pyMonth tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
 
-    // Fetch YTD line items per customer to compute best-seller % (unit-based).
+    // Fetch YTD line items per customer to compute best-seller % (line-based, not unit-based).
+    // Each order line counts as 1 regardless of quantity.
     // bestSeller set is profCod1=Y items; cached 30 min.
     const [bsSet] = await Promise.all([getBestSellerSet()]);
     const bsPctData = {};
@@ -243,13 +244,12 @@ router.get('/accounts', async (req, res) => {
       try {
         const enc   = encodeURIComponent(c.custNo);
         const items = await fetchAllPagesPar(
-          `/api/v1/Customers/${enc}/line-items?filter=businessDate:gte:${ytdStart},businessDate:lte:${today}&compact=true&fields=itemNo,quantity&pageSize=500`
+          `/api/v1/Customers/${enc}/line-items?filter=businessDate:gte:${ytdStart},businessDate:lte:${today}&compact=true&fields=itemNo&pageSize=500`
         );
         let bsUnits = 0, totalUnits = 0;
         for (const l of items) {
-          const qty = parseFloat(l.quantity || l.qty || 1);
-          totalUnits += qty;
-          if (bsSet.has((l.itemNo || '').trim().toUpperCase())) bsUnits += qty;
+          totalUnits += 1;
+          if (bsSet.has((l.itemNo || '').trim().toUpperCase())) bsUnits += 1;
         }
         bsPctData[c.custNo] = { bsUnits, totalUnits };
       } catch (_) {
