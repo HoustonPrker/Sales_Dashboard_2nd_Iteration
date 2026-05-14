@@ -196,11 +196,11 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 .num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Fira Code', monospace; }
 .num-ctr { text-align: center; font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Fira Code', monospace; }
 .data-table th.num-ctr { text-align: center; }
-.acct-grid-wrap { max-height: calc(100vh - 400px); overflow-y: auto; min-height: 200px; }
-.data-table tr.acct-totals-row td { position: sticky; bottom: 0; background: #1a2332; color: #e2e8f0; font-weight: 700; font-size: 13px; border-top: 2px solid #3d5a80; border-bottom: none; padding: 10px 14px; z-index: 2; }
-.data-table tr.acct-totals-row td .vel-up   { color: #86efac; }
-.data-table tr.acct-totals-row td .vel-ss   { color: #fcd34d; }
-.data-table tr.acct-totals-row td .vel-down { color: #fca5a5; }
+.acct-grid-wrap { max-height: calc(100vh - 290px); overflow-y: auto; min-height: 200px; }
+.data-table tr.acct-totals-row td { position: sticky; bottom: 0; background: #f8fafc; color: #1a2332; font-weight: 700; font-size: 13px; border-top: 2px solid #e5e7eb; border-bottom: none; padding: 10px 14px; z-index: 2; }
+.data-table tr.acct-totals-row td .vel-up   { color: #059669; }
+.data-table tr.acct-totals-row td .vel-ss   { color: #d97706; }
+.data-table tr.acct-totals-row td .vel-down { color: #dc2626; }
 
 /* ── FOOTER ───────────────────────────────── */
 .dash-footer { padding: 8px 24px 6px; font-size: 12px; color: #9ca3af; text-align: right; border-top: 1px solid #e5e7eb; background: #fff; flex-shrink: 0; }
