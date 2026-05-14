@@ -10,6 +10,403 @@ let acctRepFilter  = 'All';
 let acctViewCharts = {};
 let acctOverviewData = null; // cached rep-overview API response
 
+// ── Column layout system ──────────────────────────────────────
+
+const ACCT_COL_DEFS = {
+  name:        { id: 'name',        label: 'Customer Name',    sortKey: 'name',        cls: '',        tip: '<strong>Customer Name</strong><br>Legal business name as recorded in NCR.' },
+  custNo:      { id: 'custNo',      label: 'Acct #',           sortKey: 'custNo',      cls: 'num-ctr', tip: '<strong>Account Number</strong><br>NCR customer ID used to look up order history.' },
+  state:       { id: 'state',       label: 'State',            sortKey: 'state',       cls: 'num-ctr', tip: '<strong>State</strong><br>Billing state on the customer record.' },
+  tier:        { id: 'tier',        label: 'Health',           sortKey: 'tier',        cls: 'num-ctr', tip: '<strong>Health Tier</strong><br>Classified by 3 signals — worst signal wins.<br><strong>Critical:</strong> gone quiet or sales collapsed<br><strong>At Risk:</strong> late on orders or declining sales<br><strong>Attention:</strong> slowing cadence or behind pace<br><strong>Healthy:</strong> no warning signals<br>Hover any badge for signal detail.' },
+  ytdSales:    { id: 'ytdSales',    label: 'YTD Sales',        sortKey: 'ytdSales',    cls: 'num-ctr', tip: '<strong>Year-to-Date Sales</strong><br>Sum of all ticket totals from Jan 1 of the current year through today.' },
+  target:      { id: 'target',      label: 'Target',           sortKey: 'target',      cls: 'num-ctr', tip: '<strong>Sales Target</strong><br>Prior-year same-period sales (Jan 1 – today last year). Used as the pace benchmark for % to Target.' },
+  pctToTarget: { id: 'pctToTarget', label: '% to Target',      sortKey: 'pctToTarget', cls: 'num-ctr', tip: '<strong>% to Target</strong><br>Formula: YTD Sales ÷ Target<br>Shows how far along the customer is relative to their prior-year pace. 100% = matching last year exactly.' },
+  priorYtd:    { id: 'priorYtd',    label: 'Prior YTD',        sortKey: 'priorYtd',    cls: 'num-ctr', tip: '<strong>Prior Year-to-Date</strong><br>Sum of ticket totals for the same Jan 1 – today window one year ago.' },
+  pctChange:   { id: 'pctChange',   label: '% Change',         sortKey: 'pctChange',   cls: 'num-ctr', tip: '<strong>YoY % Change</strong><br>Formula: (YTD Sales − Prior YTD) ÷ Prior YTD<br>Positive = growing vs same period last year.' },
+  bsPct:       { id: 'bsPct',       label: 'BS %',             sortKey: 'bsPct',       cls: 'num-ctr', tip: '<strong>Best Seller %</strong><br>Formula: Best Seller lines ÷ Total lines (YTD)<br>Items flagged in NCR with profCod1 = Y.' },
+  daysSince:   { id: 'daysSince',   label: 'Days Since Order', sortKey: 'daysSince',   cls: 'num-ctr', tip: '<strong>Days Since Last Order</strong><br>Calendar days from the customer\'s most recent order date to today.' },
+  lastOrder:   { id: 'lastOrder',   label: 'Last Order Date',  sortKey: 'lastOrder',   cls: 'num-ctr', tip: '<strong>Last Order Date</strong><br>Date of the most recent ticket in NCR for this customer.' },
+  // Hidden by default — available via Column Chooser
+  salesRep:    { id: 'salesRep',    label: 'Sales Rep',        sortKey: 'salesRep',    cls: 'num-ctr', tip: '<strong>Sales Rep</strong><br>Sales representative currently assigned to this account.' },
+  monthGoal:   { id: 'monthGoal',   label: 'Month Goal',       sortKey: 'monthGoal',   cls: 'num-ctr', tip: '<strong>Monthly Goal</strong><br>Prior-year same-month sales × 1.05 for this individual account.' },
+  pyFullYear:  { id: 'pyFullYear',  label: 'Prior Full Year',  sortKey: 'pyFullYear',  cls: 'num-ctr', tip: '<strong>Prior Full Year</strong><br>Full prior calendar year sales (Jan 1 – Dec 31 last year) for this account.' },
+};
+
+const ACCT_DEFAULT_LAYOUT = {
+  name: 'Default',
+  columns: [
+    { id: 'name',        visible: true,  order: 0  },
+    { id: 'custNo',      visible: true,  order: 1  },
+    { id: 'state',       visible: true,  order: 2  },
+    { id: 'tier',        visible: true,  order: 3  },
+    { id: 'ytdSales',    visible: true,  order: 4  },
+    { id: 'target',      visible: true,  order: 5  },
+    { id: 'pctToTarget', visible: true,  order: 6  },
+    { id: 'priorYtd',    visible: true,  order: 7  },
+    { id: 'pctChange',   visible: true,  order: 8  },
+    { id: 'bsPct',       visible: true,  order: 9  },
+    { id: 'daysSince',   visible: true,  order: 10 },
+    { id: 'lastOrder',   visible: true,  order: 11 },
+    { id: 'salesRep',    visible: false, order: 12 },
+    { id: 'monthGoal',   visible: false, order: 13 },
+    { id: 'pyFullYear',  visible: false, order: 14 },
+  ]
+};
+
+// TODO: future migration — when real auth lands, swap localStorage for
+// backend storage keyed by user email. Caller interface stays the same.
+const layoutStore = {
+  _key:       'kellis_account_layouts',
+  _activeKey: 'kellis_account_active_layout',
+  getSavedLayouts()         { try { return JSON.parse(localStorage.getItem(this._key) || '[]'); } catch (_) { return []; } },
+  saveLayout(layout)        { const ll = this.getSavedLayouts().filter(l => l.name !== layout.name); if (ll.length >= 20) ll.shift(); ll.push(layout); localStorage.setItem(this._key, JSON.stringify(ll)); },
+  deleteLayout(name)        { localStorage.setItem(this._key, JSON.stringify(this.getSavedLayouts().filter(l => l.name !== name))); },
+  getActiveLayoutName()     { return localStorage.getItem(this._activeKey) || null; },
+  setActiveLayoutName(name) { name ? localStorage.setItem(this._activeKey, name) : localStorage.removeItem(this._activeKey); },
+};
+
+let acctLayout = null;
+
+function initAcctLayout() {
+  if (acctLayout) return;
+  const activeName = layoutStore.getActiveLayoutName();
+  if (activeName) {
+    const saved = layoutStore.getSavedLayouts().find(l => l.name === activeName);
+    if (saved) { acctLayout = JSON.parse(JSON.stringify(saved)); return; }
+  }
+  acctLayout = JSON.parse(JSON.stringify(ACCT_DEFAULT_LAYOUT));
+}
+
+function acctVisibleCols() {
+  return [...acctLayout.columns]
+    .sort((a, b) => a.order - b.order)
+    .filter(c => c.visible && ACCT_COL_DEFS[c.id])
+    .map(c => ACCT_COL_DEFS[c.id]);
+}
+
+// ── Per-cell renderers ────────────────────────────────────────
+
+function renderAcctTd(colId, a) {
+  switch (colId) {
+    case 'name':
+      return `<td><a class="acct-name-link" onclick="openCustomerAccount('${a.custNo}')">${a.name || '—'}</a></td>`;
+    case 'custNo':
+      return `<td class="num-ctr" style="font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80">${a.custNo}</td>`;
+    case 'state':
+      return `<td class="num-ctr">${a.state || '—'}</td>`;
+    case 'tier': {
+      const tierKey   = a.tier;
+      const tierCls   = `tier-${tierKey.toLowerCase()}`;
+      const tierLabel = tierKey.replace('AtRisk', 'At Risk');
+      const hsAttr    = a.healthSignals ? ` data-hs='${JSON.stringify(a.healthSignals).replace(/'/g, '&#39;')}'` : '';
+      return `<td class="num-ctr"><span class="tier-badge ${tierCls}"${hsAttr}>${tierLabel}</span></td>`;
+    }
+    case 'ytdSales':    return `<td class="num-ctr">${fmt$(a.ytdSales)}</td>`;
+    case 'target':      return `<td class="num-ctr">${a.target > 0 ? fmt$(a.target) : '—'}</td>`;
+    case 'pctToTarget': {
+      const pct = a.target > 0 ? (a.pctToTarget * 100).toFixed(1) + '%' : '—';
+      const cls = a.target > 0 ? (a.pctToTarget >= 1 ? 'vel-up' : a.pctToTarget >= 0.75 ? 'vel-ss' : 'vel-down') : '';
+      return `<td class="num-ctr"><span class="${cls}">${pct}</span></td>`;
+    }
+    case 'priorYtd':    return `<td class="num-ctr">${a.priorYtd > 0 ? fmt$(a.priorYtd) : '—'}</td>`;
+    case 'pctChange': {
+      const v     = a.priorYtd > 0 ? ((a.ytdSales - a.priorYtd) / a.priorYtd * 100).toFixed(1) : null;
+      const cls   = v !== null ? (parseFloat(v) >= 0 ? 'vel-up' : 'vel-down') : '';
+      const arrow = v !== null ? (parseFloat(v) >= 0 ? '↑' : '↓') : '';
+      return `<td class="num-ctr"><span class="${cls}">${arrow}</span>${v !== null ? ' ' + v + '%' : '—'}</td>`;
+    }
+    case 'bsPct':       return `<td class="num-ctr">${a.totalUnits > 0 ? (a.bsPct * 100).toFixed(1) + '%' : '—'}</td>`;
+    case 'daysSince': {
+      const cls = a.daysSinceOrder >= 60 ? 'vel-down' : a.daysSinceOrder >= 30 ? 'vel-ss' : '';
+      const str = a.daysSinceOrder >= 999 ? '—' : a.daysSinceOrder + 'd';
+      return `<td class="num-ctr"><span class="${cls}">${str}</span></td>`;
+    }
+    case 'lastOrder': {
+      const d = a.lastOrderDate;
+      return `<td class="num-ctr">${d ? d.slice(5,7) + '-' + d.slice(8,10) + '-' + d.slice(0,4) : '—'}</td>`;
+    }
+    case 'salesRep':    return `<td class="num-ctr">${a.salesRep || '—'}</td>`;
+    case 'monthGoal':   return `<td class="num-ctr">${a.monthGoal > 0 ? fmt$(a.monthGoal) : '—'}</td>`;
+    case 'pyFullYear':  return `<td class="num-ctr">${a.pyFullYear > 0 ? fmt$(a.pyFullYear) : '—'}</td>`;
+    default:            return '<td>—</td>';
+  }
+}
+
+function renderAcctTotalsCell(colId, t) {
+  switch (colId) {
+    case 'name':
+      return `<td style="text-align:left;font-size:12px;opacity:0.75;font-weight:600">${t.label}</td>`;
+    case 'ytdSales':    return `<td class="num-ctr">${fmt$(t.ytd)}</td>`;
+    case 'target':      return `<td class="num-ctr">${t.target > 0 ? fmt$(t.target) : '—'}</td>`;
+    case 'pctToTarget': {
+      const v   = t.target > 0 ? (t.ytd / t.target * 100).toFixed(1) + '%' : '—';
+      const cls = t.target > 0 ? (t.ytd / t.target >= 1 ? 'vel-up' : t.ytd / t.target >= 0.75 ? 'vel-ss' : 'vel-down') : '';
+      return `<td class="num-ctr"><span class="${cls}">${v}</span></td>`;
+    }
+    case 'priorYtd':    return `<td class="num-ctr">${t.priorYtd > 0 ? fmt$(t.priorYtd) : '—'}</td>`;
+    case 'pctChange': {
+      const v     = t.priorYtd > 0 ? ((t.ytd - t.priorYtd) / t.priorYtd * 100).toFixed(1) : null;
+      const cls   = v !== null ? (parseFloat(v) >= 0 ? 'vel-up' : 'vel-down') : '';
+      const arrow = v !== null ? (parseFloat(v) >= 0 ? '↑' : '↓') : '';
+      return `<td class="num-ctr"><span class="${cls}">${arrow}</span>${v !== null ? ' ' + v + '%' : '—'}</td>`;
+    }
+    case 'bsPct':       return `<td class="num-ctr">${t.allUnits > 0 ? (t.bsUnits / t.allUnits * 100).toFixed(1) + '%' : '—'}</td>`;
+    case 'monthGoal':   return `<td class="num-ctr">${t.monthGoal > 0 ? fmt$(t.monthGoal) : '—'}</td>`;
+    case 'pyFullYear':  return `<td class="num-ctr">${t.pyFullYear > 0 ? fmt$(t.pyFullYear) : '—'}</td>`;
+    default:            return '<td></td>';
+  }
+}
+
+// ── Context menu ──────────────────────────────────────────────
+
+function showAcctColMenu(e) {
+  e.preventDefault();
+  closeAcctColMenu();
+  const layouts    = layoutStore.getSavedLayouts();
+  const activeName = layoutStore.getActiveLayoutName();
+  const vw = window.innerWidth;
+
+  const layoutItems = layouts.length
+    ? layouts.map(l => {
+        const safe = l.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return `<div class="acm-item" onclick="loadAcctLayout('${safe}')">
+          <span class="acm-check">${l.name === activeName ? '✓' : ''}</span>${l.name}
+          <span class="acm-del" onclick="event.stopPropagation();deleteAcctLayout('${safe}')" title="Delete">✕</span>
+        </div>`;
+      }).join('')
+    : '<div class="acm-disabled">No saved layouts</div>';
+
+  const el = document.createElement('div');
+  el.id = 'acct-col-menu';
+  el.className = 'acct-col-menu';
+  el.innerHTML = `
+    <div class="acm-item" onclick="openAcctChooser()">⊞ Column Chooser</div>
+    <div class="acm-sep"></div>
+    <div class="acm-label">Saved Layouts</div>
+    ${layoutItems}
+    <div class="acm-sep"></div>
+    <div class="acm-item" onclick="saveAcctLayoutPrompt()">💾 Save current layout…</div>
+    <div class="acm-item" onclick="resetAcctLayout()">↺ Reset to default</div>`;
+  document.body.appendChild(el);
+  const menuW = 210;
+  el.style.left = (e.clientX + menuW > vw ? e.clientX - menuW : e.clientX) + 'px';
+  el.style.top  = e.clientY + 'px';
+  setTimeout(() => document.addEventListener('mousedown', closeAcctColMenu, { once: true }), 0);
+}
+
+function closeAcctColMenu() {
+  const m = document.getElementById('acct-col-menu');
+  if (m) m.remove();
+}
+
+// ── Column chooser panel ──────────────────────────────────────
+
+let acctChooserSnapshot = null;
+
+function openAcctChooser() {
+  closeAcctColMenu();
+  if (document.getElementById('acct-chooser')) return;
+  acctChooserSnapshot = JSON.parse(JSON.stringify(acctLayout.columns));
+
+  const panel = document.createElement('div');
+  panel.id = 'acct-chooser';
+  panel.className = 'acct-chooser';
+  panel.innerHTML = buildChooserHTML();
+  document.body.appendChild(panel);
+  requestAnimationFrame(() => panel.classList.add('acct-chooser-open'));
+  bindChooserDrag();
+}
+
+function buildChooserHTML() {
+  const ordered = [...acctLayout.columns].sort((a, b) => a.order - b.order);
+  const rows = ordered.map(c => {
+    const def = ACCT_COL_DEFS[c.id];
+    if (!def) return '';
+    return `<div class="acc-row" data-id="${c.id}" draggable="true">
+      <span class="acc-drag" title="Drag to reorder">⠿</span>
+      <label class="acc-label">
+        <input type="checkbox" ${c.visible ? 'checked' : ''} onchange="acctChooserToggle('${c.id}',this.checked)">
+        ${def.label}
+      </label>
+    </div>`;
+  }).join('');
+
+  return `
+    <div class="acc-header">
+      <span style="font-weight:700;font-size:14px;color:#1a2332">Column Chooser</span>
+      <button class="acc-close" onclick="closeAcctChooser(true)">✕</button>
+    </div>
+    <input class="acc-search" id="acc-search" placeholder="Filter columns…" oninput="acctChooserFilter(this.value)">
+    <div class="acc-list" id="acc-list">${rows}</div>
+    <div class="acc-footer">
+      <button class="acc-btn acc-btn-secondary" onclick="closeAcctChooser(true)">Cancel</button>
+      <button class="acc-btn acc-btn-primary" onclick="closeAcctChooser(false)">Apply</button>
+    </div>`;
+}
+
+function closeAcctChooser(cancel) {
+  if (cancel && acctChooserSnapshot) {
+    acctLayout.columns = acctChooserSnapshot;
+    renderAccountsOverview();
+  }
+  const el = document.getElementById('acct-chooser');
+  if (el) { el.classList.remove('acct-chooser-open'); setTimeout(() => el.remove(), 220); }
+  acctChooserSnapshot = null;
+}
+
+function acctChooserToggle(id, visible) {
+  const col = acctLayout.columns.find(c => c.id === id);
+  if (col) { col.visible = visible; renderAccountsOverview(); }
+}
+
+function acctChooserFilter(q) {
+  const term = q.toLowerCase();
+  document.querySelectorAll('#acc-list .acc-row').forEach(row => {
+    const lbl = (row.querySelector('.acc-label') || {}).textContent || '';
+    row.style.display = lbl.toLowerCase().includes(term) ? '' : 'none';
+  });
+}
+
+function bindChooserDrag() {
+  const list = document.getElementById('acc-list');
+  if (!list) return;
+  let dragging = null;
+  list.addEventListener('dragstart', e => {
+    dragging = e.target.closest('.acc-row');
+    if (dragging) { dragging.classList.add('acc-dragging'); e.dataTransfer.effectAllowed = 'move'; }
+  });
+  list.addEventListener('dragover', e => {
+    e.preventDefault();
+    const target = e.target.closest('.acc-row');
+    if (!target || target === dragging) return;
+    const after = e.clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
+    after ? target.after(dragging) : target.before(dragging);
+  });
+  list.addEventListener('dragend', () => {
+    if (dragging) dragging.classList.remove('acc-dragging');
+    dragging = null;
+    document.querySelectorAll('#acc-list .acc-row').forEach((row, idx) => {
+      const col = acctLayout.columns.find(c => c.id === row.dataset.id);
+      if (col) col.order = idx;
+    });
+    renderAccountsOverview();
+  });
+}
+
+// ── Layout save / load / delete / reset ──────────────────────
+
+function saveAcctLayoutPrompt() {
+  closeAcctColMenu();
+  const defaultName = acctLayout.name !== 'Default' ? acctLayout.name : 'My Layout';
+  const name = prompt('Layout name:', defaultName);
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim();
+  const exists  = layoutStore.getSavedLayouts().find(l => l.name === trimmed);
+  if (exists && !confirm(`"${trimmed}" already exists. Overwrite?`)) return;
+  const layout = { name: trimmed, columns: JSON.parse(JSON.stringify(acctLayout.columns)) };
+  layoutStore.saveLayout(layout);
+  layoutStore.setActiveLayoutName(trimmed);
+  acctLayout.name = trimmed;
+  renderAccountsOverview();
+}
+
+function loadAcctLayout(name) {
+  closeAcctColMenu();
+  const layout = layoutStore.getSavedLayouts().find(l => l.name === name);
+  if (!layout) return;
+  acctLayout = JSON.parse(JSON.stringify(layout));
+  layoutStore.setActiveLayoutName(name);
+  renderAccountsOverview();
+}
+
+function deleteAcctLayout(name) {
+  closeAcctColMenu();
+  if (!confirm(`Delete layout "${name}"?`)) return;
+  layoutStore.deleteLayout(name);
+  if (layoutStore.getActiveLayoutName() === name) {
+    layoutStore.setActiveLayoutName(null);
+    acctLayout = JSON.parse(JSON.stringify(ACCT_DEFAULT_LAYOUT));
+  }
+  renderAccountsOverview();
+}
+
+function resetAcctLayout() {
+  closeAcctColMenu();
+  acctLayout = JSON.parse(JSON.stringify(ACCT_DEFAULT_LAYOUT));
+  layoutStore.setActiveLayoutName(null);
+  renderAccountsOverview();
+}
+
+// ── Header drag-to-reorder ────────────────────────────────────
+
+function bindAcctHeaderDrag() {
+  const thead = document.querySelector('.acct-grid-wrap thead tr');
+  if (!thead) return;
+
+  let indicator = document.getElementById('acct-col-drop-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.id = 'acct-col-drop-indicator';
+    indicator.className = 'acct-col-drop-indicator';
+    document.body.appendChild(indicator);
+  }
+
+  let dragId = null, dropTarget = null, dropAfter = false;
+
+  function hide() { indicator.style.display = 'none'; }
+
+  thead.addEventListener('dragstart', e => {
+    const handle = e.target.closest('.col-drag-handle');
+    if (!handle) { e.preventDefault(); return; }
+    dragId = handle.dataset.colId;
+    handle.closest('th').classList.add('col-th-dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', dragId);
+  });
+
+  thead.addEventListener('dragover', e => {
+    e.preventDefault();
+    const th = e.target.closest('th[data-col-id]');
+    if (!th || th.dataset.colId === dragId) { hide(); return; }
+    dropTarget = th;
+    const rect = th.getBoundingClientRect();
+    dropAfter  = e.clientX > rect.left + rect.width / 2;
+    indicator.style.cssText = `display:block;left:${(dropAfter ? rect.right : rect.left) - 2}px;top:${rect.top}px;height:${rect.height}px`;
+  });
+
+  thead.addEventListener('dragleave', e => {
+    if (!thead.contains(e.relatedTarget)) hide();
+  });
+
+  thead.addEventListener('dragend', () => {
+    hide();
+    thead.querySelectorAll('th').forEach(th => th.classList.remove('col-th-dragging'));
+    dragId = null; dropTarget = null;
+  });
+
+  thead.addEventListener('drop', e => {
+    e.preventDefault();
+    hide();
+    const fromId = e.dataTransfer.getData('text/plain');
+    const toId   = dropTarget && dropTarget.dataset.colId;
+    thead.querySelectorAll('th').forEach(th => th.classList.remove('col-th-dragging'));
+    dragId = null; dropTarget = null;
+    if (!fromId || !toId || fromId === toId) return;
+    const sorted   = [...acctLayout.columns].sort((a, b) => a.order - b.order);
+    const fromIdx  = sorted.findIndex(c => c.id === fromId);
+    const toIdx    = sorted.findIndex(c => c.id === toId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const [moved]  = sorted.splice(fromIdx, 1);
+    const insertAt = dropAfter
+      ? (fromIdx < toIdx ? toIdx : toIdx + 1)
+      : (fromIdx < toIdx ? toIdx - 1 : toIdx);
+    sorted.splice(Math.max(0, Math.min(insertAt, sorted.length)), 0, moved);
+    sorted.forEach((c, i) => { c.order = i; });
+    acctLayout.columns = sorted;
+    renderAccountsOverview();
+    setTimeout(bindAcctHeaderDrag, 0);
+  });
+}
+
 const HEALTH_COLORS = {
   Healthy:   '#059669',
   Attention: '#eab308',
@@ -141,6 +538,7 @@ const acctTooltipDefaults = {
 
 function renderStoreView() {
   if (!dataReady) return;
+  initAcctLayout();
   renderAccountsOverview();
   fetchRepOverview();
 }
@@ -412,6 +810,9 @@ function renderAccountsOverview() {
       case 'bsPct':       return dir * ((a.bsPct || 0)    - (b.bsPct    || 0));
       case 'daysSince':   return dir * (a.daysSinceOrder - b.daysSinceOrder);
       case 'lastOrder':   return dir * (a.lastOrderDate || '').localeCompare(b.lastOrderDate || '');
+      case 'salesRep':    return dir * (a.salesRep || '').localeCompare(b.salesRep || '');
+      case 'monthGoal':   return dir * ((a.monthGoal || 0) - (b.monthGoal || 0));
+      case 'pyFullYear':  return dir * ((a.pyFullYear || 0) - (b.pyFullYear || 0));
       default:            return dir * (a.ytdSales - b.ytdSales);
     }
   });
@@ -424,42 +825,21 @@ function renderAccountsOverview() {
     return `<button class="tier-filter-btn${active ? ' active' : ''}" onclick="setAcctTierFilter('${tier}')">${label}</button>`;
   };
 
-  // ── Table ─────────────────────────────────────────────────────
-  const cols = [
-    { key: 'name',        label: 'Customer Name',
-      tip: '<strong>Customer Name</strong><br>Legal business name as recorded in NCR.' },
-    { key: 'custNo',      label: 'Acct #',          cls: 'num-ctr',
-      tip: '<strong>Account Number</strong><br>NCR customer ID used to look up order history.' },
-    { key: 'state',       label: 'State',            cls: 'num-ctr',
-      tip: '<strong>State</strong><br>Billing state on the customer record.' },
-    { key: 'tier',        label: 'Health',           cls: 'num-ctr',
-      tip: '<strong>Health Tier</strong><br>Classified by 3 signals — worst signal wins.<br><strong>Critical:</strong> gone quiet or sales collapsed<br><strong>At Risk:</strong> late on orders or declining sales<br><strong>Attention:</strong> slowing cadence or behind pace<br><strong>Healthy:</strong> no warning signals<br>Hover any badge for signal detail.' },
-    { key: 'ytdSales',    label: 'YTD Sales',        cls: 'num-ctr',
-      tip: '<strong>Year-to-Date Sales</strong><br>Sum of all ticket totals from Jan 1 of the current year through today.' },
-    { key: 'target',      label: 'Target',           cls: 'num-ctr',
-      tip: '<strong>Sales Target</strong><br>Prior-year same-period sales (Jan 1 – today last year). Used as the pace benchmark for % to Target.' },
-    { key: 'pctToTarget', label: '% to Target',      cls: 'num-ctr',
-      tip: '<strong>% to Target</strong><br>Formula: YTD Sales ÷ Target<br>Shows how far along the customer is relative to their prior-year pace. 100% = matching last year exactly.' },
-    { key: 'priorYtd',    label: 'Prior YTD',        cls: 'num-ctr',
-      tip: '<strong>Prior Year-to-Date</strong><br>Sum of ticket totals for the same Jan 1 – today window one year ago. Same-period comparison to keep the YoY % meaningful mid-year.' },
-    { key: 'pctChange',   label: '% Change',         cls: 'num-ctr',
-      tip: '<strong>YoY % Change</strong><br>Formula: (YTD Sales − Prior YTD) ÷ Prior YTD<br>Positive = growing vs same period last year. Blank for new customers with no prior year data.' },
-    { key: 'bsPct',       label: 'BS %',             cls: 'num-ctr',
-      tip: '<strong>Best Seller %</strong><br>Formula: Best Seller units ÷ Total units (YTD)<br>Share of this year\'s unit volume made up of priority/best-seller items (flagged in NCR with profCod1 = Y).' },
-    { key: 'daysSince',   label: 'Days Since Order', cls: 'num-ctr',
-      tip: '<strong>Days Since Last Order</strong><br>Calendar days from the customer\'s most recent order date to today. Used by the Health Tier engine to detect ordering gaps.' },
-    { key: 'lastOrder',   label: 'Last Order Date',  cls: 'num-ctr',
-      tip: '<strong>Last Order Date</strong><br>Date of the most recent ticket in NCR for this customer.' },
-  ];
+  // ── Table — dynamic column layout ───────────────────────────
+  const visCols = acctVisibleCols();
+  const colCount = visCols.length;
 
-  const thead = cols.map(c => {
-    const active  = acctSortCol === c.key;
+  const thead = visCols.map(col => {
+    const active  = acctSortCol === col.sortKey;
     const icon    = active ? (acctSortDir === 'asc' ? '▲' : '▼') : '⇅';
-    const cls     = [c.cls || '', 'sort-th', active ? 'sort-active' : ''].filter(Boolean).join(' ');
-    const tipHtml = c.tip
-      ? `<span class="kpi-info-wrap col-tip-wrap"><span class="kpi-info-icon">i<span class="kpi-tooltip-box col-tip-box">${c.tip}</span></span></span>`
+    const cls     = [col.cls || '', 'sort-th', active ? 'sort-active' : ''].filter(Boolean).join(' ');
+    const tipHtml = col.tip
+      ? `<span class="kpi-info-wrap col-tip-wrap"><span class="kpi-info-icon">i<span class="kpi-tooltip-box col-tip-box">${col.tip}</span></span></span>`
       : '';
-    return `<th class="${cls}" onclick="acctSortBy('${c.key}')">${c.label}${tipHtml}<span class="sort-icon">${icon}</span></th>`;
+    return `<th class="${cls}" data-col-id="${col.id}" onclick="acctSortBy('${col.sortKey}')" oncontextmenu="showAcctColMenu(event)">
+      <span class="col-drag-handle" draggable="true" data-col-id="${col.id}" title="Drag to reorder" onclick="event.stopPropagation()">⠿</span>
+      ${col.label}${tipHtml}<span class="sort-icon">${icon}</span>
+    </th>`;
   }).join('');
 
   // ── Totals row ───────────────────────────────────────────────
@@ -468,65 +848,19 @@ function renderAccountsOverview() {
   const totPriorYtd = list.reduce((s, a) => s + (a.priorYtd || 0), 0);
   const totBsUnits  = list.reduce((s, a) => s + (a.bsUnits || 0), 0);
   const totAllUnits = list.reduce((s, a) => s + (a.totalUnits || 0), 0);
-
-  const totPctTgt    = totTarget   > 0 ? (totYtd / totTarget * 100).toFixed(1) + '%'       : '—';
-  const totPctTgtCls = totTarget   > 0 ? (totYtd / totTarget >= 1 ? 'vel-up' : totYtd / totTarget >= 0.75 ? 'vel-ss' : 'vel-down') : '';
-  const totPctChgVal = totPriorYtd > 0 ? ((totYtd - totPriorYtd) / totPriorYtd * 100).toFixed(1) : null;
-  const totPctChgCls = totPctChgVal !== null ? (parseFloat(totPctChgVal) >= 0 ? 'vel-up' : 'vel-down') : '';
-  const totPctChgArr = totPctChgVal !== null ? (parseFloat(totPctChgVal) >= 0 ? '↑' : '↓') : '';
-  const totBsPct     = totAllUnits  > 0 ? (totBsUnits / totAllUnits * 100).toFixed(1) + '%' : '—';
-  const totLabel     = acctTierFilter === 'All' ? `All ${list.length} accounts` : `${acctTierFilter.replace('AtRisk','At Risk')} (${list.length})`;
+  const totMonthGoal = list.reduce((s, a) => s + (a.monthGoal || 0), 0);
+  const totPyFull   = list.reduce((s, a) => s + (a.pyFullYear || 0), 0);
+  const totLabel    = acctTierFilter === 'All' ? `All ${list.length} accounts` : `${acctTierFilter.replace('AtRisk','At Risk')} (${list.length})`;
+  const totData     = { label: totLabel, ytd: totYtd, target: totTarget, priorYtd: totPriorYtd, bsUnits: totBsUnits, allUnits: totAllUnits, monthGoal: totMonthGoal, pyFullYear: totPyFull };
 
   const tfoot = `<tfoot>
-    <tr class="acct-totals-row">
-      <td style="text-align:left;font-size:12px;opacity:0.75;font-weight:600">${totLabel}</td>
-      <td></td><td></td><td></td>
-      <td class="num-ctr">${fmt$(totYtd)}</td>
-      <td class="num-ctr">${totTarget > 0 ? fmt$(totTarget) : '—'}</td>
-      <td class="num-ctr"><span class="${totPctTgtCls}">${totPctTgt}</span></td>
-      <td class="num-ctr">${totPriorYtd > 0 ? fmt$(totPriorYtd) : '—'}</td>
-      <td class="num-ctr"><span class="${totPctChgCls}">${totPctChgArr}</span>${totPctChgVal !== null ? ' ' + totPctChgVal + '%' : '—'}</td>
-      <td class="num-ctr">${totBsPct}</td>
-      <td></td><td></td>
-    </tr>
+    <tr class="acct-totals-row">${visCols.map(c => renderAcctTotalsCell(c.id, totData)).join('')}</tr>
   </tfoot>`;
 
   const tbody = list.map(a => {
-    const pctTgt = a.target > 0 ? (a.pctToTarget * 100).toFixed(1) + '%' : '—';
-    const pctTgtCls = a.target > 0 ? (a.pctToTarget >= 1 ? 'vel-up' : a.pctToTarget >= 0.75 ? 'vel-ss' : 'vel-down') : '';
-
-    const pctChange = a.priorYtd > 0
-      ? ((a.ytdSales - a.priorYtd) / a.priorYtd * 100).toFixed(1)
-      : null;
-    const pctChangeCls  = pctChange !== null ? (parseFloat(pctChange) >= 0 ? 'vel-up' : 'vel-down') : '';
-    const pctChangeArrow = pctChange !== null ? (parseFloat(pctChange) >= 0 ? '↑' : '↓') : '';
-
-    const tierKey   = a.tier;
-    const tierCls   = `tier-${tierKey.toLowerCase().replace('atrisk', 'atrisk')}`;
-    const tierLabel = tierKey.replace('AtRisk', 'At Risk');
-    const hsAttr    = a.healthSignals ? ` data-hs='${JSON.stringify(a.healthSignals).replace(/'/g, '&#39;')}'` : '';
-
-    const daysCls = a.daysSinceOrder >= 60 ? 'vel-down' : a.daysSinceOrder >= 30 ? 'vel-ss' : '';
-    const daysStr = a.daysSinceOrder >= 999 ? '—' : a.daysSinceOrder + 'd';
-
-    const rowBg = tierKey === 'Critical' ? 'background:#fff5f5'
-                : tierKey === 'AtRisk'   ? 'background:#fff8f0' : '';
-
-    return `<tr style="${rowBg}">
-      <td><a class="acct-name-link" onclick="openCustomerAccount('${a.custNo}')">${a.name || '—'}</a></td>
-      <td class="num-ctr" style="font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80">${a.custNo}</td>
-      <td class="num-ctr">${a.state || '—'}</td>
-      <td class="num-ctr"><span class="tier-badge ${tierCls}"${hsAttr}>${tierLabel}</span></td>
-      <td class="num-ctr">${fmt$(a.ytdSales)}</td>
-      <td class="num-ctr">${a.target > 0 ? fmt$(a.target) : '—'}</td>
-      <td class="num-ctr"><span class="${pctTgtCls}">${pctTgt}</span></td>
-      <td class="num-ctr">${a.priorYtd > 0 ? fmt$(a.priorYtd) : '—'}</td>
-      <td class="num-ctr"><span class="${pctChangeCls}">${pctChangeArrow}</span>${pctChange !== null ? ' ' + pctChange + '%' : '—'}</td>
-      <td class="num-ctr">${a.totalUnits > 0 ? (a.bsPct * 100).toFixed(1) + '%' : '—'}</td>
-      <td class="num-ctr"><span class="${daysCls}">${daysStr}</span></td>
-      <td class="num-ctr">${a.lastOrderDate ? a.lastOrderDate.slice(5,7) + '-' + a.lastOrderDate.slice(8,10) + '-' + a.lastOrderDate.slice(0,4) : '—'}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="12" style="padding:20px;color:#9ca3af;text-align:center">No accounts found.</td></tr>';
+    const rowBg = a.tier === 'Critical' ? 'background:#fff5f5' : a.tier === 'AtRisk' ? 'background:#fff8f0' : '';
+    return `<tr style="${rowBg}">${visCols.map(c => renderAcctTd(c.id, a)).join('')}</tr>`;
+  }).join('') || `<tr><td colspan="${colCount}" style="padding:20px;color:#9ca3af;text-align:center">No accounts found.</td></tr>`;
 
   document.getElementById('store-view-content').innerHTML = `
     <div id="acct-overview-kpis">
@@ -549,6 +883,13 @@ function renderAccountsOverview() {
 
     <div class="tier-filter-bar">
       ${tierBtn('All')}${tierBtn('Healthy')}${tierBtn('Attention')}${tierBtn('AtRisk')}${tierBtn('Critical')}
+      <span class="acct-layout-badge">${(() => {
+        const n = layoutStore.getActiveLayoutName();
+        return n && n !== 'Default'
+          ? `Layout: <strong>${n}</strong> · <a href="#" class="acct-layout-reset" onclick="event.preventDefault();resetAcctLayout()">Reset</a>`
+          : '';
+      })()}</span>
+      <button class="acct-layout-chooser-btn" onclick="openAcctChooser()" title="Column Chooser">⊞ Columns</button>
     </div>
 
     <div class="inv-wrap acct-grid-wrap">
@@ -559,7 +900,7 @@ function renderAccountsOverview() {
       </table>
     </div>`;
 
-  setTimeout(() => renderAccountsCharts(list, byRep), 0);
+  setTimeout(() => { renderAccountsCharts(list, byRep); bindAcctHeaderDrag(); }, 0);
   if (acctOverviewData) renderOverviewKpis();
 }
 
