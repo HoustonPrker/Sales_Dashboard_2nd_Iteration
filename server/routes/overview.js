@@ -13,7 +13,7 @@
 const express = require('express');
 const router  = express.Router();
 const { doFetch, fetchAllPages, fetchAllPagesPar, routeTimer, SALES_REP, MONTHLY_GROWTH_GOAL_PCT, pyMonthGlobalCache } = require('../lib/api');
-const { countBusinessDays, computeYearRunRate } = require('../utils/business-days');
+const { countBusinessDays, computeYearRunRate, monthBusinessDayContext } = require('../utils/business-days');
 
 // 5-minute cache keyed by rep
 const overviewCache = {};
@@ -94,6 +94,9 @@ router.get('/rep-overview', async (req, res) => {
     // ── Year run rate ─────────────────────────────────────────
     const { elapsed, total: bdTotal, rate: yearRunRate } = computeYearRunRate(now);
 
+    // ── Month business-day context (for Month Run Rate KPI) ───
+    const monthBd = monthBusinessDayContext(now);
+
     // ── Monthly goal — filter global pyMonth tickets to this rep's current accounts ─
     const repCustSet = new Set(repCustomers.map(c => (c.custNo || '').trim()).filter(Boolean));
     const pyMonthRaw = pyMonthAllTickets
@@ -171,6 +174,11 @@ router.get('/rep-overview', async (req, res) => {
         linesPrior,
       },
       pctInvoiced,
+      monthRunRate: {
+        elapsed:    monthBd.elapsed,
+        total:      monthBd.total,
+        pctElapsed: monthBd.pctElapsed,
+      },
       bestSeller: { pct: 0, lines: 0, total: 0 },
     };
 

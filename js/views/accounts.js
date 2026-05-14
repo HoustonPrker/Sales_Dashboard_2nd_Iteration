@@ -275,11 +275,11 @@ function renderOverviewKpis() {
                 : 'no prior yr data',
               '',
               `<strong>CY avg ticket:</strong> ${fmt$(d.avg.ticketCurrent)}<br><strong>PY avg ticket:</strong> ${fmt$(d.avg.ticketPrior)}<br><strong>Change:</strong> ${ticketChg !== null ? (parseFloat(ticketChg) >= 0 ? '+' : '') + ticketChg + '%' : '—'}`)}
-            ${pill('% Invoiced',
-              d.pctInvoiced != null ? (d.pctInvoiced * 100).toFixed(1) + '%' : '—',
-              'of MTD sales on PO',
+            ${pill('Month Run Rate',
+              d.monthRunRate ? d.monthRunRate.pctElapsed.toFixed(1) + '%' : '—',
+              d.monthRunRate ? `${d.monthRunRate.elapsed} of ${d.monthRunRate.total} business days` : '',
               '',
-              `<strong>Invoiced sales:</strong> tickets with a customer PO<br><strong>Basis:</strong> MTD ticket totals`)}
+              '<strong>Month Run Rate:</strong> business days elapsed ÷ total business days in the month<br><strong>Business day:</strong> Mon–Fri excluding US federal holidays')}
             ${pill('Avg Lines',
               d.avg.linesCurrent.toFixed(1),
               linesChg !== null
