@@ -28,6 +28,7 @@ app.use('/proxy/auth', require('./routes/auth'));
 app.use('/proxy', require('./middleware/requireAuth'));
 
 // ── Routes ────────────────────────────────────────────────────
+app.use('/proxy/admin', require('./routes/admin'));
 app.use('/proxy', require('./routes/config'));
 app.use('/proxy', require('./routes/customers'));
 app.use('/proxy', require('./routes/categories'));

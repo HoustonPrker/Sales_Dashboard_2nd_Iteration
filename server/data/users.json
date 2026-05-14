@@ -1,0 +1,25 @@
+{
+  "users": [
+    {
+      "username": "HOUSTONP",
+      "displayName": "Houston Parker",
+      "role": "admin",
+      "passwordHash": "$2b$10$gSLDqnlzBoV2YK.NKsaDF./RWsn0qJb14NwuqmDz..1Yj.aZl3mVC",
+      "createdAt": "2026-05-14T21:02:33.515Z"
+    },
+    {
+      "username": "MCARTR",
+      "displayName": "Mike Carter",
+      "role": "manager",
+      "passwordHash": "$2b$10$rmcyhpAK3nsoJu6QPxPdQ.72S2AwKvyyLmnCN8cA6hRThcZSJ.bqK",
+      "createdAt": "2026-05-14T21:02:33.584Z"
+    },
+    {
+      "username": "BHALL",
+      "displayName": "Brian Hall",
+      "role": "manager",
+      "passwordHash": "$2b$10$NdS89NC6kDWdDhL0N1LpMe3sOLkUYWXzZ1IGYYFpRfrsqKaZ6WXFu",
+      "createdAt": "2026-05-14T21:02:33.650Z"
+    }
+  ]
+}

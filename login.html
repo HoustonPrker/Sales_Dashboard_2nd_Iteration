@@ -174,9 +174,9 @@
 
     <form id="login-form" onsubmit="handleLogin(event)">
       <div class="form-group">
-        <label for="username">Username</label>
+        <label for="username">Counterpoint Username</label>
         <input type="text" id="username" name="username" autocomplete="username"
-               placeholder="Enter your username" required autofocus>
+               placeholder="e.g. HOUSTONP" required autofocus style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
       </div>
 
       <div class="form-group">
