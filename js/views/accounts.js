@@ -9,6 +9,9 @@ let acctTierFilter = 'All';
 let acctRepFilter  = 'All';
 let acctViewCharts = {};
 let acctOverviewData = null; // cached rep-overview API response
+let acctFilters    = {};     // { colId → Set | string | {min,max} }
+let acctFilterOpenId    = null;
+let acctFilterDebounce  = null;
 
 // ── Column layout system ──────────────────────────────────────
 
@@ -154,6 +157,233 @@ function renderAcctTotalsCell(colId, t) {
     case 'pyFullYear':  return `<td class="num-ctr">${t.pyFullYear > 0 ? fmt$(t.pyFullYear) : '—'}</td>`;
     default:            return '<td></td>';
   }
+}
+
+// ── Column filter system ─────────────────────────────────────
+
+const ACCT_FILTER_TYPES = {
+  name: 'text', custNo: 'text', salesRep: 'text', lastOrder: 'text',
+  state: 'checklist', tier: 'checklist',
+  ytdSales: 'range', target: 'range', pctToTarget: 'range', priorYtd: 'range',
+  pctChange: 'range', bsPct: 'range', daysSince: 'range',
+  monthGoal: 'range', pyFullYear: 'range',
+};
+
+function acctFilterActive(colId) {
+  const f = acctFilters[colId];
+  if (!f) return false;
+  if (f instanceof Set) return f.size > 0;
+  if (typeof f === 'object') return f.min != null || f.max != null;
+  return !!f;
+}
+
+function applyAcctFilters(list) {
+  return list.filter(a => {
+    for (const [colId, filter] of Object.entries(acctFilters)) {
+      if (!acctFilterActive(colId)) continue;
+      switch (colId) {
+        case 'tier':      if (!filter.has(a.tier))            return false; break;
+        case 'state':     if (!filter.has(a.state || ''))     return false; break;
+        case 'name':      if (!(a.name     || '').toLowerCase().includes(filter.toLowerCase())) return false; break;
+        case 'custNo':    if (!(a.custNo   || '').toLowerCase().includes(filter.toLowerCase())) return false; break;
+        case 'salesRep':  if (!(a.salesRep || '').toLowerCase().includes(filter.toLowerCase())) return false; break;
+        case 'lastOrder': if (!(a.lastOrderDate || '').includes(filter)) return false; break;
+        case 'ytdSales':    if (filter.min != null && a.ytdSales < filter.min) return false;
+                            if (filter.max != null && a.ytdSales > filter.max) return false; break;
+        case 'target':      if (filter.min != null && a.target < filter.min) return false;
+                            if (filter.max != null && a.target > filter.max) return false; break;
+        case 'pctToTarget': { const v = a.pctToTarget * 100;
+                            if (filter.min != null && v < filter.min) return false;
+                            if (filter.max != null && v > filter.max) return false; break; }
+        case 'priorYtd':    if (filter.min != null && a.priorYtd < filter.min) return false;
+                            if (filter.max != null && a.priorYtd > filter.max) return false; break;
+        case 'pctChange': { const v = a.priorYtd > 0 ? (a.ytdSales - a.priorYtd) / a.priorYtd * 100 : null;
+                            if (v === null) return false;
+                            if (filter.min != null && v < filter.min) return false;
+                            if (filter.max != null && v > filter.max) return false; break; }
+        case 'bsPct':     { const v = a.bsPct * 100;
+                            if (filter.min != null && v < filter.min) return false;
+                            if (filter.max != null && v > filter.max) return false; break; }
+        case 'daysSince':   if (filter.min != null && a.daysSinceOrder < filter.min) return false;
+                            if (filter.max != null && a.daysSinceOrder > filter.max) return false; break;
+        case 'monthGoal':   if (filter.min != null && (a.monthGoal||0) < filter.min) return false;
+                            if (filter.max != null && (a.monthGoal||0) > filter.max) return false; break;
+        case 'pyFullYear':  if (filter.min != null && (a.pyFullYear||0) < filter.min) return false;
+                            if (filter.max != null && (a.pyFullYear||0) > filter.max) return false; break;
+      }
+    }
+    return true;
+  });
+}
+
+function showColFilter(colId, event) {
+  event.stopPropagation();
+  // Toggle: clicking the same button again closes the panel
+  if (acctFilterOpenId === colId) { closeColFilter(); return; }
+  closeColFilter();
+  acctFilterOpenId = colId;
+  _mountFilterPanel(colId, event.currentTarget.getBoundingClientRect());
+  setTimeout(() => document.addEventListener('mousedown', _onOutsideFilter), 0);
+}
+
+function _mountFilterPanel(colId, anchorRect) {
+  const type  = ACCT_FILTER_TYPES[colId] || 'text';
+  const panel = document.createElement('div');
+  panel.id    = 'acct-col-filter-panel';
+  panel.className = 'acct-col-filter-panel';
+  panel.innerHTML = _buildFilterHTML(colId, type);
+  document.body.appendChild(panel);
+  const pw   = 230;
+  panel.style.left = Math.min(anchorRect.left, window.innerWidth - pw - 8) + 'px';
+  panel.style.top  = (anchorRect.bottom + 4) + 'px';
+  const inp = panel.querySelector('input:not([type=checkbox])');
+  if (inp) { inp.focus(); inp.select && inp.select(); }
+}
+
+function _onOutsideFilter(e) {
+  const p = document.getElementById('acct-col-filter-panel');
+  if (p && p.contains(e.target)) return;
+  // Also ignore clicks on the filter buttons themselves (they handle toggle)
+  if (e.target.closest('.col-filter-btn')) return;
+  closeColFilter();
+  document.removeEventListener('mousedown', _onOutsideFilter);
+}
+
+function closeColFilter() {
+  const p = document.getElementById('acct-col-filter-panel');
+  if (p) p.remove();
+  acctFilterOpenId = null;
+}
+
+function reopenActiveFilter() {
+  if (!acctFilterOpenId) return;
+  const btn = document.querySelector(`th[data-col-id="${acctFilterOpenId}"] .col-filter-btn`);
+  if (!btn) { acctFilterOpenId = null; return; }
+  _mountFilterPanel(acctFilterOpenId, btn.getBoundingClientRect());
+}
+
+function _buildFilterHTML(colId, type) {
+  const def   = ACCT_COL_DEFS[colId] || {};
+  const label = def.label || colId;
+  let body = '';
+
+  if (type === 'checklist') {
+    let options = [];
+    if (colId === 'tier') {
+      options = [
+        { value: 'Healthy',   label: 'Healthy',   color: '#059669' },
+        { value: 'Attention', label: 'Attention', color: '#eab308' },
+        { value: 'AtRisk',    label: 'At Risk',   color: '#ea580c' },
+        { value: 'Critical',  label: 'Critical',  color: '#dc2626' },
+      ];
+    } else if (colId === 'state') {
+      const states = [...new Set((accountsData || []).map(a => a.state || '').filter(Boolean))].sort();
+      options = states.map(s => ({ value: s, label: s }));
+    }
+    const currentSet = (acctFilters[colId] instanceof Set) ? acctFilters[colId] : new Set();
+    // Unchecked = filtered out; checked = included. If set is empty all are shown (no filter).
+    const rows = options.map(opt => {
+      const checked = currentSet.size === 0 || currentSet.has(opt.value);
+      const dot = opt.color
+        ? `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${opt.color};flex-shrink:0"></span>`
+        : '';
+      return `<label class="acf-check-row">
+        <input type="checkbox" value="${opt.value}" ${checked ? 'checked' : ''} onchange="acctChecklistChange('${colId}',this)">
+        ${dot}<span>${opt.label}</span>
+      </label>`;
+    }).join('');
+    const allChecked = currentSet.size === 0;
+    body = `
+      <label class="acf-check-row acf-select-all">
+        <input type="checkbox" ${allChecked ? 'checked' : ''} onchange="acctChecklistSelectAll('${colId}',this)">
+        <span style="font-weight:600;color:#374151">Select All</span>
+      </label>
+      <div class="acf-sep"></div>
+      <div class="acf-checklist">${rows}</div>`;
+  } else if (type === 'text') {
+    const cur = typeof acctFilters[colId] === 'string' ? acctFilters[colId] : '';
+    body = `<input class="acf-text" type="text" placeholder="Search ${label}…" value="${cur.replace(/"/g,'&quot;')}"
+      oninput="acctTextChange('${colId}',this.value)"
+      onkeydown="if(event.key==='Enter'||event.key==='Escape')closeColFilter()">`;
+  } else {
+    // range
+    const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && !(acctFilters[colId] instanceof Set))
+      ? acctFilters[colId] : {};
+    const isPercent = ['pctToTarget','pctChange','bsPct'].includes(colId);
+    const unit = isPercent ? '%' : colId === 'daysSince' ? 'days' : colId === 'ytdSales'||colId === 'target'||colId === 'priorYtd'||colId === 'monthGoal'||colId === 'pyFullYear' ? '$' : '';
+    body = `<div class="acf-range">
+      <input class="acf-range-inp" type="number" placeholder="Min${unit ? ' '+unit : ''}" value="${cur.min ?? ''}"
+        oninput="acctRangeChange('${colId}','min',this.value)">
+      <span class="acf-range-dash">—</span>
+      <input class="acf-range-inp" type="number" placeholder="Max${unit ? ' '+unit : ''}" value="${cur.max ?? ''}"
+        oninput="acctRangeChange('${colId}','max',this.value)">
+    </div>`;
+  }
+
+  return `
+    <div class="acf-header">
+      <span class="acf-title">${label}</span>
+      <button class="acf-clear" onclick="clearColFilter('${colId}')">Clear</button>
+    </div>
+    ${body}`;
+}
+
+function acctChecklistChange(colId, cb) {
+  const panel = document.getElementById('acct-col-filter-panel');
+  if (!panel) return;
+  const boxes   = [...panel.querySelectorAll('.acf-checklist input[type=checkbox]')];
+  const checked = boxes.filter(b => b.checked).map(b => b.value);
+  // Update "Select All" checkbox state
+  const allBox = panel.querySelector('.acf-select-all input');
+  if (allBox) allBox.checked = checked.length === boxes.length;
+
+  if (checked.length === 0 || checked.length === boxes.length) delete acctFilters[colId];
+  else acctFilters[colId] = new Set(checked);
+  renderAccountsOverview();
+  setTimeout(reopenActiveFilter, 0);
+}
+
+function acctChecklistSelectAll(colId, cb) {
+  const panel = document.getElementById('acct-col-filter-panel');
+  if (!panel) return;
+  panel.querySelectorAll('.acf-checklist input[type=checkbox]').forEach(b => { b.checked = cb.checked; });
+  if (cb.checked) delete acctFilters[colId];
+  else acctFilters[colId] = new Set(); // empty set = show nothing
+  renderAccountsOverview();
+  setTimeout(reopenActiveFilter, 0);
+}
+
+function acctTextChange(colId, value) {
+  clearTimeout(acctFilterDebounce);
+  acctFilterDebounce = setTimeout(() => {
+    const v = value.trim();
+    if (v) acctFilters[colId] = v; else delete acctFilters[colId];
+    renderAccountsOverview();
+    // Don't reopen — user is typing in the panel which persists until outside click
+  }, 280);
+}
+
+function acctRangeChange(colId, side, value) {
+  clearTimeout(acctFilterDebounce);
+  acctFilterDebounce = setTimeout(() => {
+    if (!acctFilters[colId] || acctFilters[colId] instanceof Set) acctFilters[colId] = {};
+    const num = parseFloat(value);
+    if (!isNaN(num)) acctFilters[colId][side] = num;
+    else delete acctFilters[colId][side];
+    if (acctFilters[colId].min == null && acctFilters[colId].max == null) delete acctFilters[colId];
+    renderAccountsOverview();
+  }, 280);
+}
+
+function clearColFilter(colId) {
+  delete acctFilters[colId];
+  closeColFilter();
+  renderAccountsOverview();
+}
+
+function clearAllAcctFilters() {
+  acctFilters = {};
+  renderAccountsOverview();
 }
 
 // ── Context menu ──────────────────────────────────────────────
@@ -792,8 +1022,9 @@ function renderAccountsOverview() {
   const tierCounts = { All: byRep.length, Healthy: 0, Attention: 0, AtRisk: 0, Critical: 0 };
   byRep.forEach(a => tierCounts[a.tier] = (tierCounts[a.tier] || 0) + 1);
 
-  // Apply tier filter then sort
+  // Apply tier filter, column filters, then sort
   let list = acctTierFilter === 'All' ? byRep : byRep.filter(a => a.tier === acctTierFilter);
+  list = applyAcctFilters(list);
   list = [...list].sort((a, b) => {
     const dir = acctSortDir === 'asc' ? 1 : -1;
     const pctChange = x => x.priorYtd > 0 ? (x.ytdSales - x.priorYtd) / x.priorYtd : -1;
@@ -830,15 +1061,21 @@ function renderAccountsOverview() {
   const colCount = visCols.length;
 
   const thead = visCols.map(col => {
-    const active  = acctSortCol === col.sortKey;
-    const icon    = active ? (acctSortDir === 'asc' ? '▲' : '▼') : '⇅';
-    const cls     = [col.cls || '', 'sort-th', active ? 'sort-active' : ''].filter(Boolean).join(' ');
-    const tipHtml = col.tip
+    const active      = acctSortCol === col.sortKey;
+    const icon        = active ? (acctSortDir === 'asc' ? '▲' : '▼') : '⇅';
+    const cls         = [col.cls || '', 'sort-th', active ? 'sort-active' : ''].filter(Boolean).join(' ');
+    const tipHtml     = col.tip
       ? `<span class="kpi-info-wrap col-tip-wrap"><span class="kpi-info-icon">i<span class="kpi-tooltip-box col-tip-box">${col.tip}</span></span></span>`
+      : '';
+    const filterOn    = acctFilterActive(col.id);
+    const filterBtnCls = 'col-filter-btn' + (filterOn ? ' col-filter-active' : '');
+    const hasFilter   = ACCT_FILTER_TYPES[col.id];
+    const filterBtn   = hasFilter
+      ? `<button class="${filterBtnCls}" title="Filter" onclick="showColFilter('${col.id}',event)">▾</button>`
       : '';
     return `<th class="${cls}" data-col-id="${col.id}" onclick="acctSortBy('${col.sortKey}')" oncontextmenu="showAcctColMenu(event)">
       <span class="col-drag-handle" draggable="true" data-col-id="${col.id}" title="Drag to reorder" onclick="event.stopPropagation()">⠿</span>
-      ${col.label}${tipHtml}<span class="sort-icon">${icon}</span>
+      ${col.label}${tipHtml}${filterBtn}<span class="sort-icon">${icon}</span>
     </th>`;
   }).join('');
 
@@ -850,7 +1087,9 @@ function renderAccountsOverview() {
   const totAllUnits = list.reduce((s, a) => s + (a.totalUnits || 0), 0);
   const totMonthGoal = list.reduce((s, a) => s + (a.monthGoal || 0), 0);
   const totPyFull   = list.reduce((s, a) => s + (a.pyFullYear || 0), 0);
-  const totLabel    = acctTierFilter === 'All' ? `All ${list.length} accounts` : `${acctTierFilter.replace('AtRisk','At Risk')} (${list.length})`;
+  const activeFilterCount = Object.keys(acctFilters).filter(k => acctFilterActive(k)).length;
+  const totLabel    = (acctTierFilter === 'All' ? `All ${list.length} accounts` : `${acctTierFilter.replace('AtRisk','At Risk')} (${list.length})`) +
+                      (activeFilterCount > 0 ? ` · ${activeFilterCount} filter${activeFilterCount > 1 ? 's' : ''}` : '');
   const totData     = { label: totLabel, ytd: totYtd, target: totTarget, priorYtd: totPriorYtd, bsUnits: totBsUnits, allUnits: totAllUnits, monthGoal: totMonthGoal, pyFullYear: totPyFull };
 
   const tfoot = `<tfoot>
@@ -889,6 +1128,7 @@ function renderAccountsOverview() {
           ? `Layout: <strong>${n}</strong> · <a href="#" class="acct-layout-reset" onclick="event.preventDefault();resetAcctLayout()">Reset</a>`
           : '';
       })()}</span>
+      ${activeFilterCount > 0 ? `<button class="acct-clear-filters-btn" onclick="clearAllAcctFilters()">✕ Clear ${activeFilterCount} filter${activeFilterCount > 1 ? 's' : ''}</button>` : ''}
       <button class="acct-layout-chooser-btn" onclick="openAcctChooser()" title="Column Chooser">⊞ Columns</button>
     </div>
 
@@ -900,7 +1140,7 @@ function renderAccountsOverview() {
       </table>
     </div>`;
 
-  setTimeout(() => { renderAccountsCharts(list, byRep); bindAcctHeaderDrag(); }, 0);
+  setTimeout(() => { renderAccountsCharts(list, byRep); bindAcctHeaderDrag(); reopenActiveFilter(); }, 0);
   if (acctOverviewData) renderOverviewKpis();
 }
 
