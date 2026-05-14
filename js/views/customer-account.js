@@ -3,14 +3,14 @@
 // Deep-dive single-customer page
 // ============================================================
 
-let caCustNo      = null;
-let caCharts      = {};
-let caCatSort     = { col: 'description', dir: 'asc' };
-let caDrill       = null; // null = overview | { category, tab: 'ytd'|'best' }
-let caDrillSort   = { col: 'rank', dir: 'asc' };
-let caDrillResizeHandler = null;
-let caAiCtrl      = null; // AbortController for in-flight AI stream
-let caConversation = [];  // [{role,content}] full chat history
+let caCustNo          = null;
+let caCharts          = {};
+let caCatSort         = { col: 'description', dir: 'asc' };
+let caDrill           = null; // null | { category, tab: 'ytd'|'best', ytdItems, topItems }
+let caDrillSort       = { col: 'rank', dir: 'asc' };
+let caSelectedCategory = null; // currently highlighted category row
+let caAiCtrl          = null; // AbortController for in-flight AI stream
+let caConversation    = [];   // [{role,content}] full chat history
 
 const tooltip = {
   backgroundColor: '#fff', titleColor: '#1a2332', bodyColor: '#374151',
@@ -24,10 +24,11 @@ const tooltip = {
 async function loadCustomerAccount(custNo) {
   if (caAiCtrl) { caAiCtrl.abort(); caAiCtrl = null; }
   resetCAState();
-  caCustNo       = custNo;
-  caDrill        = null;
-  caCatSort      = { col: 'description', dir: 'asc' };
-  caConversation = [];
+  caCustNo           = custNo;
+  caDrill            = null;
+  caCatSort          = { col: 'description', dir: 'asc' };
+  caSelectedCategory = null;
+  caConversation     = [];
 
   window.location.hash = `#/customer?cust=${encodeURIComponent(custNo)}`;
 
@@ -64,24 +65,9 @@ async function loadCustomerAccount(custNo) {
     renderCA(cust, catData, mtd, []);
     ensureAITab();
 
-    // Sync drill panel height
-    const syncDrillHeight = () => {
-      const catSec     = document.getElementById('ca-cat-section');
-      const drillPanel = document.getElementById('ca-drill-panel');
-      if (catSec && drillPanel) {
-        const syncH = () => { const h = catSec.offsetHeight; if (h > 0) drillPanel.style.height = h + 'px'; };
-        syncH();
-        if (window._caDrillObserver) window._caDrillObserver.disconnect();
-        window._caDrillObserver = new ResizeObserver(syncH);
-        window._caDrillObserver.observe(catSec);
-      }
-    };
-
-    setTimeout(() => {
-      syncDrillHeight();
-      const topCat = [...catData].filter(c => c.currentYtdAmt > 0).sort((a, b) => b.currentYtdAmt - a.currentYtdAmt)[0];
-      if (topCat) openCategoryDrill(custNo, topCat.categoryCode, 'ytd');
-    }, 0);
+    // Auto-select highest-revenue category immediately (before orders load)
+    const topCat = [...catData].sort((a, b) => b.currentYtdAmt - a.currentYtdAmt)[0];
+    if (topCat) openCategoryDrill(custNo, topCat.categoryCode, 'best');
 
     // Background: await orders, then fill in order history + charts + AI
     ordersPromise.then(orders => {
@@ -94,6 +80,7 @@ async function loadCustomerAccount(custNo) {
         </div>
         ${buildOrderHistory(orders)}
       `;
+      window.caLastOrders = orders; // update so showMonthOrders has the real data
       renderCACharts(catData, orders);
       startAIPitch(cust, catData, mtd);
     });
@@ -501,30 +488,53 @@ function renderCA(cust, catData, mtd, orders) {
 
         </div>
 
-        <!-- Donut: category mix -->
-        <div style="width:230px;flex:none;border-left:1px solid rgba(255,255,255,0.12);margin-left:16px;padding:8px 4px 8px 12px;display:flex;flex-direction:column;justify-content:center">
-          <canvas id="ca-kpi-donut" style="width:100%;height:165px;display:block"></canvas>
         </div>
-
-        </div><!-- end KPI grid+donut wrapper -->
       </div>
     </div>
 
-    <!-- Category: table left, drill-down right — left sizes to content, right matches via JS -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;margin-bottom:12px">
+    <!-- Two-column master-detail: align-items:flex-start so left anchors height -->
+    <div id="ca-two-col" style="display:flex;gap:16px;margin-bottom:12px;align-items:flex-start">
 
-      <!-- Left: category table -->
-      <div id="ca-cat-section" style="display:flex;flex-direction:column;min-height:0">
+      <!-- Left: category table — natural content height, never stretched -->
+      <div id="ca-cat-panel" style="flex:0 0 45%;min-width:0">
         ${buildCatTable(catData)}
       </div>
 
-      <!-- Right: persistent drill-down panel -->
-      <div id="ca-drill-panel" style="background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.08);display:flex;flex-direction:column;overflow:hidden">
-        <div style="display:flex;align-items:center;justify-content:center;flex:1;min-height:300px;color:#9ca3af;font-size:14px">
-          Select a category to see item-level detail
-        </div>
-      </div>
+      <!-- Right: two separate peer cards stacked in a flex column.
+           Height is set by JS to match the left column. -->
+      <div id="ca-right-col" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:12px">
 
+        <!-- Donut + bar chart card (side by side, same box) -->
+        <div id="ca-donut-card" style="background:#fff;border-radius:6px;padding:0;display:flex;flex-direction:row;gap:12px;height:300px;flex-shrink:0">
+
+          <!-- Left: donut -->
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;border:1px solid #e7e5e4;border-radius:6px;padding:10px 12px">
+            <div style="text-align:center;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80;margin-bottom:8px">Category Mix</div>
+            <div style="flex:1;min-height:0;position:relative">
+              <canvas id="ca-donut-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+            </div>
+          </div>
+
+          <!-- Right: 6-month bar chart -->
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;border:1px solid #e7e5e4;border-radius:6px;padding:10px 12px">
+            <div style="text-align:center;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80;margin-bottom:8px">Last 6 Months</div>
+            <div style="flex:1;min-height:0;position:relative">
+              <canvas id="ca-bar-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Popup table card — flex:1 so it fills remaining right-col height; content scrolls inside -->
+        <div id="ca-drill-card" style="background:#fff;border:1px solid #e7e5e4;border-radius:6px;flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden">
+          <div id="ca-drill-content" style="flex:1;min-height:0;overflow-y:auto">
+            <div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:120px;color:#9ca3af;font-size:14px;padding:32px;text-align:center">
+              Click a category name or quantity to explore items
+            </div>
+          </div>
+        </div>
+
+      </div>
     </div>
 
     <!-- Order History (full width) -->
@@ -658,6 +668,9 @@ function renderCA(cust, catData, mtd, orders) {
     if (bar) bar.style.width = barPct + '%';
   }, 100);
 
+  // Sync right column height to left column after layout settles, then watch for resize
+  setTimeout(() => { syncCARightColHeight(); attachCARightColSync(); }, 0);
+
   // Ensure AI tab is always visible after render
   setTimeout(ensureAITab, 0);
 
@@ -668,6 +681,26 @@ function renderCA(cust, catData, mtd, orders) {
   window.caLastOrders  = orders;
 }
 
+// ── Right-column height sync ──────────────────────────────────
+// Sets #ca-right-col height to match #ca-cat-panel's natural content height.
+// Called after render and on window resize so bottom edges always align.
+
+function syncCARightColHeight() {
+  const left  = document.getElementById('ca-cat-panel');
+  const right = document.getElementById('ca-right-col');
+  if (!left || !right) return;
+  right.style.height = left.offsetHeight + 'px';
+}
+
+let _caResizeObserver = null;
+function attachCARightColSync() {
+  if (_caResizeObserver) _caResizeObserver.disconnect();
+  const left = document.getElementById('ca-cat-panel');
+  if (!left) return;
+  _caResizeObserver = new ResizeObserver(() => syncCARightColHeight());
+  _caResizeObserver.observe(left);
+}
+
 // ── Charts ────────────────────────────────────────────────────
 
 function renderCACharts(catData, orders) {
@@ -675,32 +708,42 @@ function renderCACharts(catData, orders) {
 
   const top8 = [...catData].sort((a, b) => b.currentYtdAmt - a.currentYtdAmt).slice(0, 8);
 
-  // ── Donut: category mix (compact KPI header panel) ───────────
-  const donutCtx = document.getElementById('ca-kpi-donut');
+  // ── Donut: category mix (right panel, white background) ──────
+  const donutCtx = document.getElementById('ca-donut-canvas');
   if (donutCtx && top8.length) {
-    const PIE_COLORS = ['#f59e0b','#e07b39','#4caf7d','#e8c53a','#9b59b6','#e74c3c','#17a2b8','#f06292'];
-    const allTotal   = catData.reduce((s, c) => s + c.currentYtdAmt, 0);
-    const top7       = top8.slice(0, 7);
-    const other      = catData.slice(7).reduce((s, c) => s + c.currentYtdAmt, 0);
+    const allTotal = catData.reduce((s, c) => s + c.currentYtdAmt, 0);
+    const top7     = top8.slice(0, 7);
+    const other    = catData.slice(7).reduce((s, c) => s + c.currentYtdAmt, 0);
     const LABEL_MAP = { 'KGS CHANGEMAKER': 'Changemaker', 'KGS CHANGEMAKERS': 'Changemaker', 'KELCHNGMKR': 'Changemaker', 'SEASONAL': 'Seasonal', 'KGS SEASONAL': 'Seasonal' };
-    const labels     = top7.map(c => {
-      const raw = (c.description || c.categoryCode).trim();
-      const s   = LABEL_MAP[raw.toUpperCase()] || raw.replace(/^KGS\s+/i, '');
-      return s.length > 13 ? s.slice(0, 12) + '…' : s;
+    const slices = top7.map(c => {
+      const raw   = (c.description || c.categoryCode).trim();
+      const label = LABEL_MAP[raw.toUpperCase()] || raw.replace(/^KGS\s+/i, '');
+      return { label: label.length > 13 ? label.slice(0, 12) + '…' : label, value: c.currentYtdAmt, color: getCategoryColor(c.categoryCode || c.description), catCode: c.categoryCode };
     });
-    const data       = top7.map(c => c.currentYtdAmt);
-    if (other > 0) { labels.push('Other'); data.push(other); }
+    if (other > 0) slices.push({ label: 'Other', value: other, color: getCategoryColor('OTHER'), catCode: null });
 
     caCharts.donut = new Chart(donutCtx.getContext('2d'), {
       type: 'doughnut',
       data: {
-        labels,
-        datasets: [{ data, backgroundColor: labels.map((_, i) => PIE_COLORS[i % PIE_COLORS.length]), borderColor: '#fff', borderWidth: 2 }]
+        labels: slices.map(s => s.label),
+        datasets: [{ data: slices.map(s => s.value), backgroundColor: slices.map(s => s.color), borderColor: '#000', borderWidth: 1 }]
       },
       options: {
         responsive: true, maintainAspectRatio: false, cutout: '52%', layout: { padding: 0 },
+        onClick: (_e, elements) => {
+          if (!elements.length) return;
+          const catCode = slices[elements[0].index]?.catCode;
+          if (catCode) openCategoryDrill(caCustNo, catCode, 'ytd');
+        },
         plugins: {
-          legend: { display: true, position: 'right', labels: { font: { size: 10 }, color: 'rgba(255,255,255,0.85)', boxWidth: 10, boxHeight: 10, padding: 5 } },
+          legend: {
+            display: true, position: 'right',
+            labels: { font: { size: 10 }, color: '#374151', boxWidth: 10, boxHeight: 10, padding: 5 },
+            onClick: (_e, legendItem) => {
+              const catCode = slices[legendItem.index]?.catCode;
+              if (catCode) openCategoryDrill(caCustNo, catCode, 'ytd');
+            }
+          },
           tooltip: {
             ...tooltip,
             callbacks: {
@@ -713,8 +756,131 @@ function renderCACharts(catData, orders) {
         }
       }
     });
+    donutCtx.style.cursor = 'pointer';
   }
 
+  // ── Bar chart: last 6 months of sales ────────────────────────
+  const barCtx = document.getElementById('ca-bar-canvas');
+  if (barCtx && orders.length) {
+    const now   = new Date();
+    const allMonthLabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    // Build last-6-months window (may span prior year)
+    const months = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push({ year: d.getFullYear(), month: d.getMonth(), label: allMonthLabels[d.getMonth()] });
+    }
+    const totals     = months.map(() => 0);
+    const orderCounts = months.map(() => 0);
+    const lineCounts  = months.map(() => 0);
+    for (const o of orders) {
+      const d = new Date(o.date || o.ticketDate || '');
+      if (isNaN(d)) continue;
+      const idx = months.findIndex(m => m.year === d.getFullYear() && m.month === d.getMonth());
+      if (idx !== -1) {
+        totals[idx]      += parseFloat(o.amount || 0);
+        orderCounts[idx] += 1;
+        lineCounts[idx]  += parseInt(o.itemCount || 0, 10);
+      }
+    }
+    // Sequential blue: oldest bar = lightest, newest = darkest
+    caCharts.bar = new Chart(barCtx.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: months.map(m => m.label),
+        datasets: [{
+          data: totals,
+          backgroundColor: months.map((_, i) => getSequentialColor(i)),
+          borderRadius: 4,
+          borderSkipped: false,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            ...tooltip,
+            callbacks: {
+              label: ctx => ' ' + fmt$(ctx.parsed.y),
+              afterLabel: ctx => {
+                const i = ctx.dataIndex;
+                const oc = orderCounts[i];
+                const lc = lineCounts[i];
+                const lines = [];
+                if (oc > 0) lines.push(` ${oc} order${oc !== 1 ? 's' : ''}`);
+                if (lc > 0) lines.push(` ${lc} line${lc !== 1 ? 's' : ''}`);
+                return lines;
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#6b7280' } },
+          y: {
+            grid: { color: '#f3f4f6' },
+            ticks: {
+              font: { size: 11 }, color: '#6b7280',
+              callback: v => '$' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)
+            }
+          }
+        }
+      }
+    });
+    barCtx.style.cursor = 'default';
+  }
+
+}
+
+// ── Month orders drill-in (bar chart click) ───────────────────
+function showMonthOrders(year, month) {
+  const drill = document.getElementById('ca-drill-content');
+  if (!drill) return;
+
+  const allMonthLabels = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const monthLabel = `${allMonthLabels[month]} ${year}`;
+  const orders = (window.caLastOrders || []).filter(o => {
+    const d = new Date(o.date || o.ticketDate || '');
+    return !isNaN(d) && d.getFullYear() === year && d.getMonth() === month;
+  }).sort((a, b) => new Date(b.date || b.ticketDate) - new Date(a.date || a.ticketDate));
+
+  if (!orders.length) {
+    drill.innerHTML = `<div style="padding:32px;text-align:center;color:#9ca3af;font-size:14px">No orders found for ${monthLabel}</div>`;
+    return;
+  }
+
+  const total = orders.reduce((s, o) => s + parseFloat(o.amount || 0), 0);
+  const rows = orders.map(o => {
+    const date   = (o.date || o.ticketDate || '').slice(0, 10);
+    const amt    = parseFloat(o.amount || 0);
+    const ticket = o.ticketNo || o.ticketNumber || o.orderId || '—';
+    return `<tr>
+      <td style="padding:8px 12px;color:#6b7280;font-size:13px">${date}</td>
+      <td style="padding:8px 12px;font-family:monospace;font-size:13px">
+        <a onclick="switchTab('item');loadOrderDetail('${caCustNo}','${ticket}')"
+           style="color:#3d5a80;text-decoration:none;cursor:pointer"
+           onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${ticket}</a>
+      </td>
+      <td style="padding:8px 12px;text-align:right;font-weight:600;color:#1a2332;font-size:13px">${fmt$(amt)}</td>
+    </tr>`;
+  }).join('');
+
+  drill.innerHTML = `
+    <div style="padding:10px 14px 8px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #f3f4f6;background:#fff;position:sticky;top:0;z-index:3">
+      <span style="font-weight:800;color:#1a2332;font-size:15px">${monthLabel}</span>
+      <span style="color:#9ca3af;font-size:13px">${orders.length} order${orders.length !== 1 ? 's' : ''}</span>
+      <span style="margin-left:auto;font-weight:700;color:#1a2332;font-size:15px">${fmt$(total)}</span>
+    </div>
+    <table class="data-table" style="width:100%">
+      <thead style="position:sticky;top:41px;z-index:2;background:#3d5a80">
+        <tr>
+          <th style="padding:8px 12px;text-align:left;font-size:12px">Date</th>
+          <th style="padding:8px 12px;text-align:left;font-size:12px">Order #</th>
+          <th style="padding:8px 12px;text-align:right;font-size:12px">Amount</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 function buildMonthlyData(orders) {
@@ -766,7 +932,7 @@ function buildCatTable(catData) {
       if (fd) seen.add(fd);
     } else {
       if (seen.has(key)) continue;
-      merged.push({ categoryCode: name, description: name, currentYtdAmt: 0, currentQty: 0, priorYtdAmt: 0, priorQty: 0, dollarChange: 0 });
+      merged.push({ categoryCode: name, description: name, currentYtdAmt: 0, currentQty: 0, priorYtdAmt: 0, priorQty: 0, mtdAmt: 0, mtdQty: 0, dollarChange: 0 });
       seen.add(key);
     }
   }
@@ -790,10 +956,6 @@ function buildCatTable(catData) {
       case 'priorYtdAmt':   return dir * (a.priorYtdAmt   - b.priorYtdAmt);
       case 'priorQty':      return dir * (a.priorQty      - b.priorQty);
       case 'dollarChange':  return dir * (a.dollarChange   - b.dollarChange);
-      case 'pctChange':     return dir * (
-        (a.priorYtdAmt > 0 ? a.currentYtdAmt / a.priorYtdAmt : 0) -
-        (b.priorYtdAmt > 0 ? b.currentYtdAmt / b.priorYtdAmt : 0)
-      );
       default: return dir * (a.currentYtdAmt - b.currentYtdAmt);
     }
   });
@@ -810,49 +972,41 @@ function buildCatTable(catData) {
   const totPriorAmt = sorted.reduce((s, c) => s + (c.priorYtdAmt   || 0), 0);
   const totPriorQty = sorted.reduce((s, c) => s + (c.priorQty      || 0), 0);
   const totDollar   = totCurrAmt - totPriorAmt;
-  const totPctChg   = totPriorAmt > 0 ? ((totCurrAmt - totPriorAmt) / totPriorAmt * 100) : null;
   const totDollarBg = totDollar >= 0 ? 'rgba(22,163,74,0.12)' : 'rgba(220,38,38,0.12)';
   const totDollarCl = totDollar >= 0 ? '#059669' : '#dc2626';
-  const totPctCl    = totPctChg === null ? '#374151' : totPctChg >= 0 ? '#059669' : '#dc2626';
-  const totPctStr   = totPctChg !== null ? (totPctChg >= 0 ? '+' : '') + totPctChg.toFixed(1) + '%' : '—';
 
   const rows = sorted.map(c => {
-    const pctChange = c.priorYtdAmt > 0 ? ((c.currentYtdAmt - c.priorYtdAmt) / c.priorYtdAmt * 100) : null;
-    const pctCls    = pctChange === null ? '' : pctChange >= 0 ? 'vel-up' : 'vel-down';
-    const pctArrow  = pctChange === null ? '' : pctChange >= 0 ? '↑' : '↓';
-    const pctStr    = pctChange !== null ? (pctChange >= 0 ? '+' : '') + pctChange.toFixed(1) + '%' : '—';
-    const dBg       = c.dollarChange >= 0 ? 'rgba(22,163,74,0.10)' : 'rgba(220,38,38,0.10)';
-    const dCl       = c.dollarChange >= 0 ? '#059669' : '#dc2626';
-    const catLabel  = c.description || c.categoryCode;
-    const isSelected = caDrill && caDrill.category === c.categoryCode;
-    return `<tr data-category="${c.categoryCode}" style="${isSelected ? 'border-left:3px solid #0d9488;background:#f0fdfa' : 'border-left:3px solid transparent'}">
-      <td class="cat-name-cell" style="width:140px;max-width:140px">
-        <a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}','best')" title="View best selling items">${catLabel}</a>
+    const dBg      = c.dollarChange >= 0 ? 'rgba(22,163,74,0.10)' : 'rgba(220,38,38,0.10)';
+    const dCl      = c.dollarChange >= 0 ? '#059669' : '#dc2626';
+    const catLabel = c.description || c.categoryCode;
+    const isSel    = c.categoryCode === caSelectedCategory;
+    const rowStyle = isSel ? 'background:#ccfbf1;border-left:3px solid #0f766e' : 'border-left:3px solid transparent';
+    return `<tr data-category="${c.categoryCode}" style="${rowStyle}">
+      <td class="cat-name-cell">
+        <a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}','best')" title="View top sellers">${catLabel}</a>
       </td>
       <td class="num-ctr">${fmt$(c.currentYtdAmt)}</td>
-      <td class="num-ctr">${c.currentQty > 0 ? `<a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}','ytd')" title="View YTD item list" style="font-weight:700">${Math.round(c.currentQty).toLocaleString()}</a>` : '—'}</td>
+      <td class="num-ctr">${c.currentQty > 0 ? `<a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}','ytd')" title="View YTD items" style="font-weight:700">${Math.round(c.currentQty).toLocaleString()}</a>` : '—'}</td>
       <td class="num-ctr">${c.priorYtdAmt > 0 ? fmt$(c.priorYtdAmt) : '—'}</td>
       <td class="num-ctr">${c.priorQty > 0 ? Math.round(c.priorQty).toLocaleString() : '—'}</td>
-      <td class="num-ctr"><span style="background:${dBg};color:${dCl};padding:3px 10px;border-radius:12px;font-size:14px;font-weight:700;white-space:nowrap;display:inline-block">${c.dollarChange >= 0 ? '+' : ''}${fmt$(c.dollarChange)}</span></td>
-      <td class="num-ctr"><span class="${pctCls}">${pctArrow} ${pctStr}</span></td>
+      <td class="num-ctr"><span style="background:${dBg};color:${dCl};padding:3px 8px;border-radius:12px;font-size:13px;font-weight:700;white-space:nowrap;display:inline-block">${c.dollarChange >= 0 ? '+' : ''}${fmt$(c.dollarChange)}</span></td>
     </tr>`;
   }).join('');
 
   const totalsRow = `
     <tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e5e7eb">
-      <td style="padding:12px 14px;color:#1a2332;width:140px;max-width:140px">TOTAL</td>
+      <td style="padding:12px 14px;color:#1a2332">TOTAL</td>
       <td class="num-ctr" style="padding:12px 8px;color:#1a2332">${fmt$(totCurrAmt)}</td>
       <td class="num-ctr" style="padding:12px 8px;color:#1a2332">${totCurrQty > 0 ? Math.round(totCurrQty).toLocaleString() : '—'}</td>
       <td class="num-ctr" style="padding:12px 8px;color:#1a2332">${totPriorAmt > 0 ? fmt$(totPriorAmt) : '—'}</td>
       <td class="num-ctr" style="padding:12px 8px;color:#1a2332">${totPriorQty > 0 ? Math.round(totPriorQty).toLocaleString() : '—'}</td>
-      <td class="num-ctr" style="padding:12px 8px"><span style="background:${totDollarBg};color:${totDollarCl};padding:3px 10px;border-radius:12px;font-size:14px;font-weight:700;white-space:nowrap;display:inline-block">${totDollar >= 0 ? '+' : ''}${fmt$(totDollar)}</span></td>
-      <td class="num-ctr" style="padding:12px 8px;font-weight:700;color:${totPctCl}">${totPctStr}</td>
+      <td class="num-ctr" style="padding:12px 8px"><span style="background:${totDollarBg};color:${totDollarCl};padding:3px 8px;border-radius:12px;font-size:13px;font-weight:700;white-space:nowrap;display:inline-block">${totDollar >= 0 ? '+' : ''}${fmt$(totDollar)}</span></td>
     </tr>`;
 
   return `
-    <div class="card" style="padding:0;height:100%;box-sizing:border-box">
+    <div class="card" style="padding:0">
       <div style="padding:14px 20px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #f3f4f6">
-        <span style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80">Category Breakdown — click a category to drill into items</span>
+        <span style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80">Category Breakdown</span>
         <div style="display:flex;gap:8px;flex-shrink:0">
           <button onclick="exportCatCSV()" style="display:flex;align-items:center;gap:5px;background:#f1f5f9;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -867,13 +1021,12 @@ function buildCatTable(catData) {
       <div class="inv-wrap">
         <table class="data-table" id="ca-cat-table">
           <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
-            ${th('description',   'Category',       '',        'width:140px')}
+            ${th('description',   'Category',       '')}
             ${th('currentYtdAmt', 'Current YTD $', 'num-ctr')}
-            ${th('currentQty',    'Curr Qty',       'num-ctr')}
-            ${th('priorYtdAmt',   'Prior YTD $',    'num-ctr')}
-            ${th('priorQty',      'Prior Qty',       'num-ctr')}
-            ${th('dollarChange',  '$ Change',        'num-ctr')}
-            ${th('pctChange',     '% Change',        'num-ctr')}
+            ${th('currentQty',    'Curr Unq Qty',  'num-ctr')}
+            ${th('priorYtdAmt',   'Prior YTD $',   'num-ctr')}
+            ${th('priorQty',      'Prior Unq Qty', 'num-ctr')}
+            ${th('dollarChange',  '$ Change',       'num-ctr')}
           </tr></thead>
           <tbody>${rows}</tbody>
           <tfoot style="position:sticky;bottom:0;z-index:2">${totalsRow}</tfoot>
@@ -886,8 +1039,8 @@ function caSortCat(col) {
   const defaultDir = col === 'description' ? 'asc' : 'desc';
   caCatSort.dir = caCatSort.col === col ? (caCatSort.dir === 'asc' ? 'desc' : 'asc') : defaultDir;
   caCatSort.col = col;
-  const sec = document.getElementById('ca-cat-section');
-  if (sec) sec.innerHTML = buildCatTable(window.caLastCatData || []);
+  const panel = document.getElementById('ca-cat-panel');
+  if (panel) panel.innerHTML = buildCatTable(window.caLastCatData || []);
 }
 
 function exportCatCSV() {
@@ -919,88 +1072,135 @@ function exportCatCSV() {
 }
 
 function printCatTable() {
-  const tbl = document.getElementById('ca-cat-table');
-  if (!tbl) return;
-  const custName = (window.caLastCust && (window.caLastCust.name || window.caLastCust.custNo)) || caCustNo || 'Account';
-  const win = window.open('', '_blank', 'width=900,height=700');
-  win.document.write(`<!DOCTYPE html><html><head><title>${custName} — Category Breakdown</title>
-    <style>
-      body { font-family: Inter, Arial, sans-serif; padding: 24px; color: #1a2332; }
-      h2 { font-size: 18px; margin: 0 0 4px; }
-      p  { font-size: 12px; color: #6b7280; margin: 0 0 16px; }
-      table { border-collapse: collapse; width: 100%; font-size: 13px; }
-      th { background: #f3f4f6; text-align: left; padding: 8px 12px; font-weight: 700; border-bottom: 2px solid #e5e7eb; color: #1a2332; }
-      th.num, td.num { text-align: right; }
-      td { padding: 7px 12px; border-bottom: 1px solid #f3f4f6; color: #1a2332; }
-      tr:last-child td { font-weight: 700; background: #f8fafc; border-top: 2px solid #e5e7eb; }
-      .up { color: #059669; } .dn { color: #dc2626; }
-    </style></head><body>
-    <h2>${custName} — Category Breakdown</h2>
-    <p>Printed ${new Date().toLocaleDateString()}</p>
-    <table>
-      <thead><tr>
-        <th>Category</th><th class="num">Current YTD $</th><th class="num">Curr Qty</th>
-        <th class="num">Prior YTD $</th><th class="num">Prior Qty</th>
-        <th class="num">$ Change</th><th class="num">% Change</th>
-      </tr></thead><tbody>`);
-  const data = window.caLastCatData || [];
+  const cust    = window.caLastCust    || {};
+  const catData = window.caLastCatData || [];
+  const mtd     = window.caLastMtd     || {};
+  if (!catData.length) return;
+
+  const ytdTotal  = parseFloat(cust.USER_YTD_SALES      || 0) || catData.reduce((s, c) => s + c.currentYtdAmt, 0);
+  const priorYear = parseFloat(cust.USER_PYTD_SALES      || 0) || 0;
+  const ppyTotal  = parseFloat(cust.USER_PPYTD_SALES     || 0) || 0;
+  const annTarget = parseFloat(cust.USER_ANNUAL_GOALS    || 0) || 0;
+  const lifetime  = parseFloat(cust.USER_LIFETIME_SALES  || 0) || 0;
+  const mtdTotal  = mtd?.total || 0;
+  const pctToTgt  = annTarget > 0 ? (ytdTotal / annTarget * 100).toFixed(1) + '%' : '—';
+  const pctChg    = priorYear > 0 ? ((ytdTotal - priorYear) / priorYear * 100) : null;
+  const pctChgStr = pctChg !== null ? (pctChg >= 0 ? '+' : '') + pctChg.toFixed(1) + '%' : '—';
+
+  // KPI tile colors: green if on track, red if below, neutral if no target
+  const ytdVsTgt   = annTarget > 0 ? (ytdTotal >= annTarget * (new Date().getMonth() / 12) ? '#059669' : '#dc2626') : '#1a2332';
+  const pctTgtColor = annTarget > 0 ? (ytdTotal / annTarget >= (new Date().getMonth() / 12) ? '#059669' : '#dc2626') : '#1a2332';
+  const ytdVsPrior  = pctChg !== null ? (pctChg >= 0 ? '#059669' : '#dc2626') : '#1a2332';
+
   const fmt = n => '$' + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  // Only color $ Change / % Change when |pct| > 10%
-  const chgClass = (dc, pct) => {
-    if (pct === null || Math.abs(pct) <= 10) return '';
-    return dc >= 0 ? 'up' : 'dn';
-  };
-  let totCurr = 0, totPrior = 0, totCurrQ = 0, totPriorQ = 0;
-  data.forEach(c => {
-    totCurr += c.currentYtdAmt || 0; totPrior += c.priorYtdAmt || 0;
-    totCurrQ += c.currentQty || 0;   totPriorQ += c.priorQty || 0;
-    const dc  = c.dollarChange || 0;
-    const pct = c.priorYtdAmt > 0 ? ((c.currentYtdAmt - c.priorYtdAmt) / c.priorYtdAmt * 100) : null;
-    const cl  = chgClass(dc, pct);
-    win.document.write(`<tr>
-      <td>${c.description || c.categoryCode}</td>
-      <td class="num">${fmt(c.currentYtdAmt)}</td>
-      <td class="num">${Math.round(c.currentQty || 0).toLocaleString()}</td>
-      <td class="num">${c.priorYtdAmt > 0 ? fmt(c.priorYtdAmt) : '—'}</td>
-      <td class="num">${c.priorQty > 0 ? Math.round(c.priorQty).toLocaleString() : '—'}</td>
-      <td class="num ${cl}">${dc >= 0 ? '+' : '-'}${fmt(dc)}</td>
-      <td class="num ${cl}">${pct !== null ? (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%' : '—'}</td>
-    </tr>`);
+  const kpi = (label, value, sub = '', valColor = '#1a2332') => `
+    <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px 14px;flex:1;min-width:0">
+      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:#6b7280;margin-bottom:3px">${label}</div>
+      <div style="font-size:15px;font-weight:800;color:${valColor}">${value}</div>
+      ${sub ? `<div style="font-size:9px;color:#9ca3af;margin-top:2px">${sub}</div>` : ''}
+    </div>`;
+
+  // Build sorted category rows using the same ordering as the live table
+  const sorted = [...catData].sort((a, b) => {
+    const dir = caCatSort.dir === 'asc' ? 1 : -1;
+    switch (caCatSort.col) {
+      case 'currentYtdAmt': return dir * (a.currentYtdAmt - b.currentYtdAmt);
+      case 'currentQty':    return dir * (a.currentQty    - b.currentQty);
+      case 'priorYtdAmt':   return dir * (a.priorYtdAmt   - b.priorYtdAmt);
+      case 'priorQty':      return dir * (a.priorQty      - b.priorQty);
+      case 'dollarChange':  return dir * (a.dollarChange   - b.dollarChange);
+      default: return dir * (a.description || '').localeCompare(b.description || '');
+    }
   });
-  const totDollar = totCurr - totPrior;
-  const totPct    = totPrior > 0 ? ((totCurr - totPrior) / totPrior * 100) : null;
-  const totCl     = chgClass(totDollar, totPct);
-  win.document.write(`<tr>
-    <td>TOTAL</td><td class="num">${fmt(totCurr)}</td>
-    <td class="num">${Math.round(totCurrQ).toLocaleString()}</td>
-    <td class="num">${fmt(totPrior)}</td>
-    <td class="num">${Math.round(totPriorQ).toLocaleString()}</td>
-    <td class="num ${totCl}">${totDollar >= 0 ? '+' : '-'}${fmt(totDollar)}</td>
-    <td class="num ${totCl}">${totPct !== null ? (totPct >= 0 ? '+' : '') + totPct.toFixed(1) + '%' : '—'}</td>
-  </tr>`);
-  win.document.write('</tbody></table></body></html>');
-  win.document.close();
-  win.print();
+
+  let totCurr = 0, totPrior = 0, totCurrQ = 0, totPriorQ = 0;
+  const tableRows = sorted.map(c => {
+    totCurr  += c.currentYtdAmt || 0;
+    totPrior += c.priorYtdAmt   || 0;
+    totCurrQ += c.currentQty    || 0;
+    totPriorQ += c.priorQty     || 0;
+    const dc   = c.dollarChange || 0;
+    const dBg  = dc >= 0 ? 'rgba(22,163,74,0.12)' : 'rgba(220,38,38,0.12)';
+    const dCl  = dc >= 0 ? '#059669' : '#dc2626';
+    return `<tr>
+      <td style="padding:7px 12px;border-bottom:1px solid #f3f4f6">${c.description || c.categoryCode}</td>
+      <td style="padding:7px 12px;text-align:right;border-bottom:1px solid #f3f4f6">${fmt$(c.currentYtdAmt)}</td>
+      <td style="padding:7px 12px;text-align:right;border-bottom:1px solid #f3f4f6">${c.currentQty > 0 ? Math.round(c.currentQty).toLocaleString() : '—'}</td>
+      <td style="padding:7px 12px;text-align:right;border-bottom:1px solid #f3f4f6">${c.priorYtdAmt > 0 ? fmt$(c.priorYtdAmt) : '—'}</td>
+      <td style="padding:7px 12px;text-align:right;border-bottom:1px solid #f3f4f6">${c.priorQty > 0 ? Math.round(c.priorQty).toLocaleString() : '—'}</td>
+      <td style="padding:7px 12px;text-align:right;border-bottom:1px solid #f3f4f6"><span style="background:${dBg};color:${dCl};padding:3px 8px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;display:inline-block">${dc >= 0 ? '+' : ''}${fmt$(dc)}</span></td>
+    </tr>`;
+  }).join('');
+
+  const totDollar  = totCurr - totPrior;
+  const totDollarBg = totDollar >= 0 ? 'rgba(22,163,74,0.12)' : 'rgba(220,38,38,0.12)';
+  const totDollarCl = totDollar >= 0 ? '#059669' : '#dc2626';
+
+  let area = document.getElementById('ca-print-area');
+  if (!area) {
+    area = document.createElement('div');
+    area.id = 'ca-print-area';
+    document.body.appendChild(area);
+  }
+
+  area.innerHTML = `
+    <div style="font-family:Inter,Arial,sans-serif;color:#1a2332;padding:0">
+      <!-- KPI ribbon -->
+      <div style="display:flex;gap:8px;flex-wrap:nowrap;margin-bottom:16px">
+        ${kpi('YTD Sales',      fmt(ytdTotal),                          'Current year to date',  ytdVsTgt)}
+        ${kpi('Annual Target',  annTarget > 0 ? fmt(annTarget) : '—',  'Full year goal')}
+        ${kpi('% to Target',    pctToTgt,                               pctChgStr + ' vs prior', pctTgtColor)}
+        ${kpi('Prior Year',     priorYear > 0 ? fmt(priorYear) : '—',  'PYTD',                  ytdVsPrior)}
+        ${kpi('Prior Prior Yr', ppyTotal  > 0 ? fmt(ppyTotal)  : '—',  '2 years ago')}
+        ${kpi('Month to Date',  fmt(mtdTotal),                          'Current month')}
+        ${kpi('Lifetime Sales', lifetime  > 0 ? fmt(lifetime)  : '—',  'All time')}
+      </div>
+
+      <!-- Category breakdown -->
+      <table style="border-collapse:collapse;width:100%;font-size:12px">
+        <thead>
+          <tr style="background:#f3f4f6">
+            <th style="text-align:left;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Category</th>
+            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Current YTD $</th>
+            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Curr Unq Qty</th>
+            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Prior YTD $</th>
+            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Prior Unq Qty</th>
+            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">$ Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tableRows}
+          <tr style="font-weight:700;background:#f8fafc;border-top:2px solid #e5e7eb">
+            <td style="padding:8px 12px">TOTAL</td>
+            <td style="padding:8px 12px;text-align:right">${fmt$(totCurr)}</td>
+            <td style="padding:8px 12px;text-align:right">${totCurrQ > 0 ? Math.round(totCurrQ).toLocaleString() : '—'}</td>
+            <td style="padding:8px 12px;text-align:right">${totPrior > 0 ? fmt$(totPrior) : '—'}</td>
+            <td style="padding:8px 12px;text-align:right">${totPriorQ > 0 ? Math.round(totPriorQ).toLocaleString() : '—'}</td>
+            <td style="padding:8px 12px;text-align:right"><span style="background:${totDollarBg};color:${totDollarCl};padding:3px 8px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;display:inline-block">${totDollar >= 0 ? '+' : ''}${fmt$(totDollar)}</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+
+  window.print();
+  setTimeout(() => { area.innerHTML = ''; }, 1000);
 }
 
 // ── Item drill-down ───────────────────────────────────────────
 
-function updateCatRowHighlight(selectedCategory) {
-  document.querySelectorAll('#ca-cat-table tbody tr[data-category]').forEach(row => {
-    const sel = row.dataset.category === selectedCategory;
-    row.style.borderLeft = sel ? '3px solid #0d9488' : '3px solid transparent';
-    row.style.background = sel ? '#f0fdfa' : '';
-  });
-}
-
-async function openCategoryDrill(custNo, category, defaultTab = 'ytd') {
+async function openCategoryDrill(custNo, category, defaultTab = 'best') {
   caDrill     = { category, tab: defaultTab };
   caDrillSort = { col: defaultTab === 'ytd' ? 'current_qty' : 'rank', dir: defaultTab === 'ytd' ? 'desc' : 'asc' };
-  const sec = document.getElementById('ca-drill-panel');
-  if (!sec) return;
 
-  updateCatRowHighlight(category);
-  sec.innerHTML = `<div style="padding:20px;color:#6b7280;display:flex;align-items:center;justify-content:center;flex:1">Loading items for <strong style="margin-left:5px">${category}</strong>…</div>`;
+  // Update selected category and re-render left table to move highlight
+  caSelectedCategory = category;
+  const catPanel = document.getElementById('ca-cat-panel');
+  if (catPanel) catPanel.innerHTML = buildCatTable(window.caLastCatData || []);
+
+  const drill = document.getElementById('ca-drill-content');
+  if (!drill) return;
+
+  drill.innerHTML = `<div style="padding:24px;color:#6b7280;display:flex;align-items:center;justify-content:center;min-height:160px">Loading items for <strong style="margin-left:5px">${category}</strong>…</div>`;
 
   const enc = encodeURIComponent(custNo);
   const cat = encodeURIComponent(category);
@@ -1015,12 +1215,12 @@ async function openCategoryDrill(custNo, category, defaultTab = 'ytd') {
     caDrill = { category, tab: defaultTab, ytdItems, topItems };
     renderItemDrill();
   } catch (e) {
-    sec.innerHTML = `<div style="padding:20px;color:#dc2626">Error loading items: ${e.message}</div>`;
+    if (drill) drill.innerHTML = `<div style="padding:20px;color:#dc2626">Error loading items: ${e.message}</div>`;
   }
 }
 
 function renderItemDrill() {
-  const sec = document.getElementById('ca-drill-panel');
+  const sec = document.getElementById('ca-drill-content');
   if (!sec || !caDrill) return;
   const { category, tab, ytdItems = [], topItems = [] } = caDrill;
 
@@ -1057,6 +1257,7 @@ function renderItemDrill() {
       case 'description': return d * (a.description || '').localeCompare(b.description || '');
       case 'prior_qty':   return d * ((a.prior_qty || 0) - (b.prior_qty || 0));
       case 'current_qty': return d * ((a.current_qty || 0) - (b.current_qty || 0));
+      case 'qty_12mo':    return d * ((a.qty_12mo || 0) - (b.qty_12mo || 0));
       case 'cadence':     return d * (a.cadence || '').localeCompare(b.cadence || '');
       case 'last_sold':   return d * (a.last_sold || '').localeCompare(b.last_sold || '');
       default: return 0;
@@ -1089,8 +1290,8 @@ function renderItemDrill() {
 
     tableHTML = `<table class="data-table">
       <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
-        ${th('rank',        '#',           'num-ctr')}
-        ${th('status',      'Status',      'num-ctr')}
+        ${th('rank',        '#',    'num-ctr')}
+        ${th('status',      'Stat', 'num-ctr')}
         ${th('itemNo',      'Item #')}
         ${th('description', 'Description')}
         ${th('prior_qty',   'LYTD',        'num-ctr')}
@@ -1102,7 +1303,7 @@ function renderItemDrill() {
     </table>`;
 
   } else {
-    // Best Selling Items tab
+    // Best Sellers mode: # / Stat / Item # / Description / 12 MO Qty / Last Purchase
     const rows = list.map(i => {
       let lastStyle = '';
       if (i.last_sold) {
@@ -1110,49 +1311,44 @@ function renderItemDrill() {
         if (daysAgo <= 30)  lastStyle = 'background:rgba(22,163,74,0.14);color:#059669;font-weight:600;padding:2px 6px;border-radius:6px;';
         if (daysAgo >= 365) lastStyle = 'background:rgba(220,38,38,0.10);color:#dc2626;font-weight:600;padding:2px 6px;border-radius:6px;';
       }
-      const notBuying = i.current_qty === 0 && i.prior_qty === 0;
+      const notBuying = (i.qty_12mo === 0 || i.qty_12mo == null) && !i.last_sold;
       return `<tr style="${notBuying ? 'background:#fff8f0' : ''}">
         <td style="padding:8px 10px;color:#9ca3af;text-align:center;width:36px">${i.rank}</td>
         <td style="padding:8px 10px;text-align:center;width:48px">${statusBadge(i.status)}</td>
         <td style="padding:8px 10px">${itemLink(i.itemNo)}</td>
         <td style="padding:8px 10px">${i.description || '—'}</td>
-        <td class="num-ctr" style="padding:8px 10px;color:#6b7280">${i.prior_qty > 0 ? i.prior_qty : '—'}</td>
-        <td class="num-ctr" style="padding:8px 10px;font-weight:${i.current_qty > 0 ? '700' : '400'};color:${i.current_qty > 0 ? '#1a2332' : '#9ca3af'}">${i.current_qty > 0 ? i.current_qty : '—'}</td>
-        <td style="padding:8px 10px"><span style="${lastStyle}">${i.last_sold || '—'}</span></td>
+        <td class="num-ctr" style="padding:8px 10px;font-weight:${i.qty_12mo > 0 ? '700' : '400'};color:${i.qty_12mo > 0 ? '#1a2332' : '#9ca3af'}">${i.qty_12mo > 0 ? i.qty_12mo : '—'}</td>
+        <td style="padding:8px 10px"><span style="${lastStyle}">${i.last_sold || 'N/A'}</span></td>
       </tr>`;
-    }).join('') || '<tr><td colspan="7" style="color:#9ca3af;padding:24px;text-align:center">No best-seller items found for this category (no profCod1=Y items).</td></tr>';
+    }).join('') || '<tr><td colspan="6" style="color:#9ca3af;padding:24px;text-align:center">No best-seller items found for this category.</td></tr>';
 
     tableHTML = `<table class="data-table">
       <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
-        ${th('rank',        '#',              'num-ctr')}
-        ${th('status',      'Status',         'num-ctr')}
+        ${th('rank',        '#',           'num-ctr')}
+        ${th('status',      'Stat',        'num-ctr')}
         ${th('itemNo',      'Item #')}
         ${th('description', 'Description')}
-        ${th('prior_qty',   'LYTD',           'num-ctr')}
-        ${th('current_qty', 'YTD',            'num-ctr')}
-        ${th('last_sold',   'Last Purchased')}
+        ${th('qty_12mo',    '12 MO Qty',   'num-ctr')}
+        ${th('last_sold',   'Last Purchase')}
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
   }
 
-  const tabLabel = tab === 'best' ? `Best Selling Items (${topItems.length})` : `YTD Purchased (${ytdItems.length})`;
-  const otherTabLabel = tab === 'best' ? `YTD Purchased (${ytdItems.length})` : `Best Sellers (${topItems.length})`;
-  const otherTab = tab === 'best' ? 'ytd' : 'best';
-  const hintText = 'Click item # to view on kellisgifts.com';
-  sec.innerHTML = `
-    <div class="card" style="padding:0;flex:1;display:flex;flex-direction:column;overflow:hidden">
-      <div style="padding:10px 14px 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-bottom:1px solid #f3f4f6;flex-shrink:0">
-        <span style="font-weight:700;color:#1a2332;font-size:13px">${category}</span>
-        <span style="color:#9ca3af;font-size:12px">·</span>
-        <span style="background:#e0f2fe;color:#0369a1;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">${tabLabel}</span>
-        <a onclick="caDrillSwapTab('${otherTab}')" style="background:#f1f5f9;color:#6b7280;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;cursor:pointer">${otherTabLabel}</a>
-        <span style="color:#9ca3af;font-size:11px;margin-left:auto">${hintText}</span>
-      </div>
-      <div class="inv-wrap" style="flex:1;overflow-y:auto">${tableHTML}</div>
-    </div>`;
+  const btnBase = 'padding:5px 12px;border:none;font-weight:600;font-size:12px;cursor:pointer;font-family:inherit;transition:background 0.12s';
+  const btnYtd  = `${btnBase};background:${tab==='ytd'?'#3d5a80':'#f8fafc'};color:${tab==='ytd'?'#fff':'#6b7280'}`;
+  const btnBest = `${btnBase};border-left:1px solid #d1d5db;background:${tab==='best'?'#3d5a80':'#f8fafc'};color:${tab==='best'?'#fff':'#6b7280'}`;
 
-  updateCatRowHighlight(category);
+  sec.innerHTML = `
+    <div style="padding:10px 14px 8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid #f3f4f6;background:#fff;position:sticky;top:0;z-index:3">
+      <span style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80">${category}</span>
+      <div style="margin-left:auto;display:inline-flex;border:1px solid #d1d5db;border-radius:8px;overflow:hidden">
+        <button onclick="caDrillSwapTab('ytd')" style="${btnYtd}">YTD Purchased (${ytdItems.length})</button>
+        <button onclick="caDrillSwapTab('best')" style="${btnBest}">Best Sellers (${topItems.length})</button>
+      </div>
+    </div>
+    <div style="padding:3px 14px 4px;font-size:11px;color:#9ca3af;background:#fff;border-bottom:1px solid #f3f4f6">Click item # to view on kellisgifts.com</div>
+    <div class="inv-wrap" style="margin:0">${tableHTML}</div>`;
 }
 
 function caDrillSortBy(col) {
@@ -1167,8 +1363,6 @@ function caDrillSwapTab(newTab) {
   caDrillSort = { col: newTab === 'ytd' ? 'current_qty' : 'rank', dir: newTab === 'ytd' ? 'desc' : 'asc' };
   renderItemDrill();
 }
-
-function closeCategoryDrill() {} // no-op — drill panel is always visible
 
 // ── AI Chat ───────────────────────────────────────────────────
 

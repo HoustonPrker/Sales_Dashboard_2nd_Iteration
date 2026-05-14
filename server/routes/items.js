@@ -186,11 +186,24 @@ router.get('/top-items/:custNo/:category', async (req, res) => {
       if (date) custByItem[key].dates.push(date);
     }
 
+    const twelveMonthsAgo = (() => {
+      const d = new Date(now);
+      d.setFullYear(d.getFullYear() - 1);
+      return d.toISOString().slice(0, 10);
+    })();
+
     const result = masterItems.map((item, idx) => {
       const key   = baseNo(item.itemNo);
       const cust  = custByItem[key] || {};
       const s     = (item.status || item.statusCode || 'A').toUpperCase();
       const dates = [...(cust.dates || [])].sort();
+      const qty12mo = allLines
+        .filter(l => baseNo(l.itemNo || '') === key)
+        .filter(l => {
+          const d = (l.businessDate || l.BusinessDate || '').slice(0, 10);
+          return d >= twelveMonthsAgo && d <= todayStr;
+        })
+        .reduce((s, l) => s + parseFloat(l.quantity || 0), 0);
       return {
         rank:           idx + 1,
         itemNo:         key,
@@ -199,6 +212,7 @@ router.get('/top-items/:custNo/:category', async (req, res) => {
         current_qty:    Math.round(cust.qty_current    || 0),
         prior_qty:      Math.round(cust.qty_prior      || 0),
         prior_full_qty: Math.round(cust.qty_prior_full || 0),
+        qty_12mo:       Math.round(qty12mo),
         current_sales:  +((cust.rev_current || 0).toFixed(2)),
         prior_sales:    +((cust.rev_prior   || 0).toFixed(2)),
         last_sold:      dates[dates.length - 1] || null,
@@ -244,7 +258,7 @@ router.get('/recommended-items', async (req, res) => {
     const itemSets = await Promise.all(categories.map(cat => fetchCategoryItems(cat).catch(() => [])));
 
     const sample = itemSets.flat()[0];
-    if (sample) console.log('[recommended-items] sample fields:', Object.keys(sample));
+    if (sample) console.log('[recommended-items] sample item:', JSON.stringify(sample));
 
     const seen   = new Set();
     const result = [];

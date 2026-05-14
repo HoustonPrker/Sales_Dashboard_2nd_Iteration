@@ -16,9 +16,16 @@ const { getActiveReps, isActiveRep } = require('../data/active-reps');
 const { classifyAccountHealth, computeTypicalInterval } = require('../utils/health-classification');
 const { monthBusinessDayContext, computePaceScore, computeYearRunRate } = require('../utils/business-days');
 
-// ── In-memory cache keyed by rep (5-minute TTL) ───────────────
+// ── In-memory cache keyed by rep (15-minute TTL) ──────────────
 const accountsCache = {};  // { [rep]: { data, ts } }
-const CACHE_TTL     = 5 * 60 * 1000;
+const CACHE_TTL     = 15 * 60 * 1000;
+
+// ── Best-seller % cache (30-min TTL) — keyed by rep ──────────
+// Decoupled from accountsCache so 498 per-customer line-item calls
+// only fire once every 30 min regardless of accounts cache churn.
+const bsPctCache    = {};  // { [rep]: { data: {custNo→{bsUnits,…}}, ts } }
+const BSPCT_TTL     = 30 * 60 * 1000;
+let   bsPctInflight = {};  // { [rep]: true } — prevent duplicate background recomputes
 
 // Global ticket caches — keyed by date range, shared across all reps.
 // Tickets carry the historical salesRep at write time, not current account owner,
@@ -243,38 +250,57 @@ router.get('/accounts', async (req, res) => {
     ]);
     console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY / ${pyMonthTickets.length} pyMonth tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
 
-    // Fetch YTD line items per customer to compute best-seller % (line-based, not unit-based).
-    // Each order line counts as 1 regardless of quantity.
-    // bestSeller set is profCod1=Y items; cached 30 min.
-    const [bsSet] = await Promise.all([getBestSellerSet()]);
-    const bsPctData = {};
-    await parallelLimit(customers.map(c => async () => {
-      try {
-        const enc = encodeURIComponent(c.custNo);
-        const [cyItems, pyItems] = await Promise.all([
-          fetchAllPagesPar(
-            `/api/v1/Customers/${enc}/line-items?filter=businessDate:gte:${ytdStart},businessDate:lte:${today}&compact=true&fields=itemNo&pageSize=500`
-          ),
-          fetchAllPagesPar(
-            `/api/v1/Customers/${enc}/line-items?filter=businessDate:gte:${pyStart},businessDate:lte:${pyEnd}&compact=true&fields=itemNo&pageSize=500`
-          ),
-        ]);
-        let bsUnits = 0, totalUnits = 0;
-        for (const l of cyItems) {
-          totalUnits += 1;
-          if (bsSet.has((l.itemNo || '').trim().toUpperCase())) bsUnits += 1;
+    // ── Best-seller % — use cached data immediately, recompute in background if stale ──
+    // bsPctCache has a 30-min TTL independent of accountsCache (15 min) so the
+    // 249×2=498 per-customer line-item calls only fire once every 30 min.
+    const bsPctData = (bsPctCache[cacheKey] && Date.now() - bsPctCache[cacheKey].ts < BSPCT_TTL)
+      ? bsPctCache[cacheKey].data
+      : {};
+
+    const bsPctStale = !bsPctCache[cacheKey] || Date.now() - bsPctCache[cacheKey].ts >= BSPCT_TTL;
+    if (bsPctStale && !bsPctInflight[cacheKey]) {
+      // Fire-and-forget: recompute in background, update cache when done
+      bsPctInflight[cacheKey] = true;
+      const _customers  = customers;
+      const _ytdStart   = ytdStart, _today = today;
+      const _pyStart    = pyStart,  _pyEnd  = pyEnd;
+      const _cacheKey   = cacheKey;
+      (async () => {
+        try {
+          const bsSet = await getBestSellerSet();
+          const fresh = {};
+          await parallelLimit(_customers.map(c => async () => {
+            try {
+              const enc = encodeURIComponent(c.custNo);
+              const [cyItems, pyItems] = await Promise.all([
+                fetchAllPagesPar(
+                  `/api/v1/Customers/${enc}/line-items?filter=businessDate:gte:${_ytdStart},businessDate:lte:${_today}&compact=true&fields=itemNo&pageSize=500`
+                ),
+                fetchAllPagesPar(
+                  `/api/v1/Customers/${enc}/line-items?filter=businessDate:gte:${_pyStart},businessDate:lte:${_pyEnd}&compact=true&fields=itemNo&pageSize=500`
+                ),
+              ]);
+              let bsUnits = 0, totalUnits = 0, pyBsUnits = 0, pyTotalUnits = 0;
+              for (const l of cyItems) { totalUnits++; if (bsSet.has((l.itemNo||'').trim().toUpperCase())) bsUnits++; }
+              for (const l of pyItems) { pyTotalUnits++; if (bsSet.has((l.itemNo||'').trim().toUpperCase())) pyBsUnits++; }
+              fresh[c.custNo] = { bsUnits, totalUnits, pyBsUnits, pyTotalUnits };
+            } catch (_) {
+              fresh[c.custNo] = { bsUnits: 0, totalUnits: 0, pyBsUnits: 0, pyTotalUnits: 0 };
+            }
+          }), 40);
+          bsPctCache[_cacheKey] = { data: fresh, ts: Date.now() };
+          // Bust accountsCache so next request gets updated bsPct values
+          delete accountsCache[_cacheKey];
+          console.log(`  bsPct background refresh done for ${_customers.length} customers`);
+        } catch (e) {
+          console.error('  bsPct background refresh error:', e.message);
+        } finally {
+          bsPctInflight[_cacheKey] = false;
         }
-        let pyBsUnits = 0, pyTotalUnits = 0;
-        for (const l of pyItems) {
-          pyTotalUnits += 1;
-          if (bsSet.has((l.itemNo || '').trim().toUpperCase())) pyBsUnits += 1;
-        }
-        bsPctData[c.custNo] = { bsUnits, totalUnits, pyBsUnits, pyTotalUnits };
-      } catch (_) {
-        bsPctData[c.custNo] = { bsUnits: 0, totalUnits: 0, pyBsUnits: 0, pyTotalUnits: 0 };
-      }
-    }), 20);
-    console.log(`  bsPct fetch done for ${customers.length} customers`);
+      })();
+      if (!bsPctCache[cacheKey]) console.log(`  bsPct cache cold — serving zeros, recomputing in background`);
+      else console.log(`  bsPct cache stale — serving cached, recomputing in background`);
+    }
 
     if (!customers.length) {
       accountsCache[cacheKey] = { data: [], ts: Date.now() };

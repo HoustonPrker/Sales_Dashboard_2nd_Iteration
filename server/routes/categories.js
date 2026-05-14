@@ -41,22 +41,47 @@ router.get('/categories/:custNo', async (req, res) => {
     if (custCatCache[key] && Date.now() - custCatCache[key].ts < CACHE_TTL) {
       return res.json(custCatCache[key].data);
     }
-    const custNo = encodeURIComponent(key);
-    const r      = await doFetch('GET', `/api/v1/Customers/${custNo}/sales-by-category`);
-    if (!r.ok) return res.status(r.status).json([]);
-    const body = await r.json();
+    const custNo  = encodeURIComponent(key);
+    const now     = new Date();
+    const mtdStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const today    = now.toISOString().slice(0, 10);
+
+    const [catResp, mtdLines] = await Promise.all([
+      doFetch('GET', `/api/v1/Customers/${custNo}/sales-by-category`),
+      fetchAllPages(`/api/v1/Customers/${custNo}/line-items?filter=businessDate:gte:${mtdStart},businessDate:lte:${today}&fields=categoryCode,quantity,lineTotal,extPrice&pageSize=500`),
+    ]);
+
+    if (!catResp.ok) return res.status(catResp.status).json([]);
+    const body = await catResp.json();
     const rows = Array.isArray(body) ? body : (body.data || []);
-    const result = rows.map(c => ({
-      categoryCode:  c.categoryCode || '',
-      description:   c.description  || c.categoryCode || '',
-      currentYtdAmt: parseFloat(c.currentYtdAmount || 0),
-      currentQty:    parseFloat(c.currentUniqQty   || 0),
-      priorYtdAmt:   parseFloat(c.priorYtdAmount   || 0),
-      priorQty:      parseFloat(c.priorUniqQty     || 0),
-      dollarChange:  c.dollarChange != null
-        ? parseFloat(c.dollarChange)
-        : parseFloat(c.currentYtdAmount || 0) - parseFloat(c.priorYtdAmount || 0),
-    })).filter(c => c.currentYtdAmt > 0 || c.priorYtdAmt > 0)
+
+    // Aggregate MTD by category
+    const mtdMap = {};
+    for (const l of mtdLines) {
+      const cat = (l.categoryCode || '').toUpperCase().trim();
+      if (!cat) continue;
+      if (!mtdMap[cat]) mtdMap[cat] = { amt: 0, qty: 0 };
+      mtdMap[cat].amt += parseFloat(l.lineTotal || l.extPrice || 0);
+      mtdMap[cat].qty += parseFloat(l.quantity || 0);
+    }
+
+    const result = rows.map(c => {
+      const catKey = (c.categoryCode || '').toUpperCase().trim();
+      const mtd    = mtdMap[catKey] || { amt: 0, qty: 0 };
+      return {
+        categoryCode:  c.categoryCode || '',
+        description:   c.description  || c.categoryCode || '',
+        currentYtdAmt: parseFloat(c.currentYtdAmount || 0),
+        currentQty:    parseFloat(c.currentUniqQty   || 0),
+        priorYtdAmt:   parseFloat(c.priorYtdAmount   || 0),
+        priorQty:      parseFloat(c.priorUniqQty     || 0),
+        mtdAmt:        +mtd.amt.toFixed(2),
+        mtdQty:        Math.round(mtd.qty),
+        dollarChange:  c.dollarChange != null
+          ? parseFloat(c.dollarChange)
+          : parseFloat(c.currentYtdAmount || 0) - parseFloat(c.priorYtdAmount || 0),
+      };
+    }).filter(c => c.currentYtdAmt > 0 || c.priorYtdAmt > 0)
       .sort((a, b) => b.currentYtdAmt - a.currentYtdAmt);
     custCatCache[key] = { data: result, ts: Date.now() };
     res.json(result);

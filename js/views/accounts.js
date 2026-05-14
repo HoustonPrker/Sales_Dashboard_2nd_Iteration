@@ -549,8 +549,8 @@ function _buildChooserRows() {
   const makeRow = c => {
     const def = ACCT_COL_DEFS[c.id];
     if (!def) return '';
-    return `<div class="acc-row" data-id="${c.id}" draggable="${c.visible ? 'true' : 'false'}">
-      <span class="acc-drag" title="Drag to reorder" style="${c.visible ? '' : 'opacity:0.3;cursor:default'}">⠿</span>
+    return `<div class="acc-row" data-id="${c.id}" data-visible="${c.visible ? '1' : '0'}" draggable="true">
+      <span class="acc-drag" title="Drag to reorder or move between sections">⠿</span>
       <label class="acc-label">
         <input type="checkbox" ${c.visible ? 'checked' : ''} onchange="acctChooserToggle('${c.id}',this.checked)">
         ${def.label}
@@ -559,8 +559,8 @@ function _buildChooserRows() {
   };
 
   const hiddenSection = hidden.length
-    ? `<div class="acc-section-divider">Hidden columns</div>${hidden.map(makeRow).join('')}`
-    : '';
+    ? `<div class="acc-section-divider" data-zone-divider="1">↓ Hidden columns — drag here to hide</div>${hidden.map(makeRow).join('')}`
+    : `<div class="acc-section-divider acc-section-divider--empty" data-zone-divider="1">↓ Drop here to hide a column</div>`;
 
   return visible.map(makeRow).join('') + hiddenSection;
 }
@@ -611,25 +611,56 @@ function bindChooserDrag() {
   const list = document.getElementById('acc-list');
   if (!list) return;
   let dragging = null;
+
   list.addEventListener('dragstart', e => {
     dragging = e.target.closest('.acc-row');
-    if (dragging) { dragging.classList.add('acc-dragging'); e.dataTransfer.effectAllowed = 'move'; }
+    if (!dragging) return;
+    dragging.classList.add('acc-dragging');
+    e.dataTransfer.effectAllowed = 'move';
   });
+
   list.addEventListener('dragover', e => {
     e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    // Allow dropping onto the divider itself (to hide a column)
+    const divider = e.target.closest('[data-zone-divider]');
+    if (divider && dragging) {
+      divider.after(dragging);
+      return;
+    }
+
     const target = e.target.closest('.acc-row');
     if (!target || target === dragging) return;
     const after = e.clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
     after ? target.after(dragging) : target.before(dragging);
   });
+
   list.addEventListener('dragend', () => {
     if (dragging) dragging.classList.remove('acc-dragging');
     dragging = null;
-    document.querySelectorAll('#acc-list .acc-row').forEach((row, idx) => {
-      const col = acctLayout.columns.find(c => c.id === row.dataset.id);
-      if (col) col.order = idx;
-    });
+
+    // Walk DOM order — everything before the divider = visible, after = hidden
+    const divider = list.querySelector('[data-zone-divider]');
+    let visOrder  = 0, hidOrder = 0;
+    let pastDivider = false;
+
+    for (const node of list.children) {
+      if (node === divider) { pastDivider = true; continue; }
+      if (!node.classList.contains('acc-row')) continue;
+      const col = acctLayout.columns.find(c => c.id === node.dataset.id);
+      if (!col) continue;
+      if (pastDivider) {
+        col.visible = false;
+        col.order   = hidOrder++;
+      } else {
+        col.visible = true;
+        col.order   = visOrder++;
+      }
+    }
+
     renderAccountsOverview();
+    refreshAcctChooserList();
   });
 }
 
@@ -1005,7 +1036,7 @@ function renderOverviewKpis() {
   const annualGrowthPct  = d.annualGrowthPct  != null ? (d.annualGrowthPct  * 100).toFixed(1) + '%' : '—';
   const monthlyGrowthPct = d.monthlyGrowthPct != null ? (d.monthlyGrowthPct * 100).toFixed(1) + '%' : '—';
   const ANNUAL_GOAL_TOOLTIP  = `<strong>Annual Goal:</strong> prior full-year sales × annual growth target<br><strong>Annual growth target:</strong> +${annualGrowthPct}<br><strong>Prior year:</strong> Jan 1 – Dec 31 last year<br><strong>Accounts:</strong> ${totalAccounts} currently assigned`;
-  const MONTHLY_GOAL_TOOLTIP = `<strong>Basis:</strong> Prior-year same-month sales<br><strong>Monthly growth target:</strong> +${monthlyGrowthPct} (set per month)<br><strong>Accounts:</strong> ${totalAccounts} currently assigned`;
+  const MONTHLY_GOAL_TOOLTIP = `<strong>Basis:</strong> Prior-year same-month sales<br><strong>Monthly growth target:</strong> +${monthlyGrowthPct} (Goal is set each month)<br><strong>Accounts:</strong> ${totalAccounts} currently assigned`;
 
   // tooltip = HTML string shown in the dark kpi-tooltip-box on hover
   const pill = (label, value, sub, valueStyle, tooltip) => `

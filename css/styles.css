@@ -11,6 +11,7 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overscroll-behavior: none;
 }
 
 /* ── NAV BAR ─────────────────────────────── */
@@ -180,8 +181,23 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 .data-table td { padding: 14px 14px; border-bottom: 1px solid #e5e7eb; border-right: 1px solid #f3f4f6; white-space: nowrap; color: #1a2332; }
 .data-table tr:nth-child(even) td { background: #f8f9fb; }
 
+/* ── Customer Account master-detail layout ─── */
+/* Left column: natural content height — never stretched */
+#ca-cat-panel { min-width: 0; }
+#ca-cat-panel .card { display: flex; flex-direction: column; min-width: 0; }
+#ca-cat-panel .inv-wrap { overflow: auto; }
+
+/* Right column: height set by JS to match left; two peer cards fill it via flex */
+#ca-right-col { overflow: hidden; }
+#ca-donut-card { overflow: hidden; }
+#ca-drill-card { overflow: hidden; }
+#ca-drill-content { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* Sticky header inside the scrolling drill content */
+#ca-drill-content thead th { position: sticky; top: 0; z-index: 2; background: #3d5a80; }
+
 /* ── Category table specific ──────────────── */
-.cat-name-cell { width: 140px; max-width: 140px; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-name-cell { font-size: 15px; font-weight: 600; white-space: nowrap; }
 .cat-top5 > td:first-child { border-left: 3px solid #3d5a80; padding-left: 11px; }
 .cat-group-end td { border-bottom: 2px solid #d1d5db; }
 
@@ -277,7 +293,9 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 .acc-btn-primary:hover { background:#344d6e; }
 .acc-btn-secondary { background:#f1f5f9; color:#374151; border-color:#e2e8f0; }
 .acc-btn-secondary:hover { background:#e2e8f0; }
-.acc-section-divider { padding:6px 14px 4px; font-size:11px; font-weight:700; color:#9ca3af; text-transform:uppercase; letter-spacing:0.05em; border-top:1px solid #f1f5f9; margin-top:4px; }
+.acc-section-divider { padding:8px 14px 6px; font-size:11px; font-weight:700; color:#9ca3af; text-transform:uppercase; letter-spacing:0.05em; border-top:2px dashed #e2e8f0; margin-top:6px; transition:background 0.1s, color 0.1s; cursor:default; }
+.acc-section-divider:hover { background:#fef9c3; color:#92400e; border-color:#fbbf24; }
+.acc-section-divider--empty { border-color:#e2e8f0; }
 
 /* Column filter button in header */
 .col-filter-btn { display:inline-flex; align-items:center; justify-content:center; background:none; border:none; cursor:pointer; color:rgba(255,255,255,0.45); font-size:13px; padding:0 2px; margin-left:2px; border-radius:3px; line-height:1; vertical-align:middle; }
