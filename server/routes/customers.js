@@ -883,11 +883,18 @@ router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (r
     const pmM = lmM === 0 ? 11 : lmM - 1;
     const pmStart  = monthStart(pmY, pmM);
     const pmEnd    = monthEnd(pmY, pmM);
+    // Prior-prior month (3 months back, for Most Consistent)
+    const ppmY = pmM === 0 ? pmY - 1 : pmY;
+    const ppmM = pmM === 0 ? 11 : pmM - 1;
+    const ppmStart = monthStart(ppmY, ppmM);
+    const ppmEnd   = monthEnd(ppmY, ppmM);
     // Prior-year equivalents (for monthly goal = prior year same month × growth factor)
-    const pyCmStart = monthStart(yr - 1, mm);
-    const pyCmEnd   = monthEnd(yr - 1, mm);
-    const pyLmStart = monthStart(lmY - 1, lmM);
-    const pyLmEnd   = monthEnd(lmY - 1, lmM);
+    const pyCmStart  = monthStart(yr - 1, mm);
+    const pyCmEnd    = monthEnd(yr - 1, mm);
+    const pyLmStart  = monthStart(lmY - 1, lmM);
+    const pyLmEnd    = monthEnd(lmY - 1, lmM);
+    const pyPpmStart = monthStart(ppmY - 1, ppmM);
+    const pyPpmEnd   = monthEnd(ppmY - 1, ppmM);
 
     // ticketFetch with optional cache (ttl=0 → no cache, ttl>0 → lbMonthCache)
     const ticketFetch = (start, end, ttl = 0) => {
@@ -907,7 +914,7 @@ router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (r
     const pyKey = `${priorStart}:${priorEnd}`;
 
     // 1. All fetches in parallel — users fetch moved here (was sequential before)
-    const [activeReps, allCustomers, cyTickets, pyTickets, cmTickets, lmTickets, pmTickets, pyCmTickets, pyLmTickets, usersRes] = await Promise.all([
+    const [activeReps, allCustomers, cyTickets, pyTickets, cmTickets, lmTickets, pmTickets, ppmTickets, pyCmTickets, pyLmTickets, pyPpmTickets, usersRes] = await Promise.all([
       getActiveReps(),
       fetchAllPagesPar(`/api/v1/Customers?fields=custNo,salesRep,lastSaleDate&pageSize=200`),
       cyYtdGlobalCache[cyKey] && Date.now() - cyYtdGlobalCache[cyKey].ts < CACHE_TTL
@@ -916,11 +923,13 @@ router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (r
       pyYtdGlobalCache[pyKey] && Date.now() - pyYtdGlobalCache[pyKey].ts < CACHE_TTL
         ? Promise.resolve(pyYtdGlobalCache[pyKey].data)
         : ticketFetch(priorStart, priorEnd).then(d => { pyYtdGlobalCache[pyKey] = { data: d, ts: Date.now() }; return d; }),
-      ticketFetch(cmStart,   cmEnd,   CACHE_TTL),   // current month — 5-min cache
-      ticketFetch(lmStart,   lmEnd,   LB_HIST_TTL), // last completed month — 2-hr cache
-      ticketFetch(pmStart,   pmEnd,   LB_HIST_TTL), // prior month — 2-hr cache
-      ticketFetch(pyCmStart, pyCmEnd, LB_HIST_TTL), // PY current month — 2-hr cache
-      ticketFetch(pyLmStart, pyLmEnd, LB_HIST_TTL), // PY last month — 2-hr cache
+      ticketFetch(cmStart,    cmEnd,    CACHE_TTL),   // current month — 5-min cache
+      ticketFetch(lmStart,    lmEnd,    LB_HIST_TTL), // last completed month — 2-hr cache
+      ticketFetch(pmStart,    pmEnd,    LB_HIST_TTL), // 2 months back — 2-hr cache
+      ticketFetch(ppmStart,   ppmEnd,   LB_HIST_TTL), // 3 months back — 2-hr cache
+      ticketFetch(pyCmStart,  pyCmEnd,  LB_HIST_TTL), // PY current month — 2-hr cache
+      ticketFetch(pyLmStart,  pyLmEnd,  LB_HIST_TTL), // PY last month — 2-hr cache
+      ticketFetch(pyPpmStart, pyPpmEnd, LB_HIST_TTL), // PY 3-months-back — 2-hr cache
       doFetch('GET', `/api/v1/System/users?filter=wrkgrpId:eq:KGS&fields=usrId,name&pageSize=500`),
     ]);
 
@@ -959,13 +968,15 @@ router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (r
     const cmMap     = buildMap(cmTickets);
     const lmMap     = buildMap(lmTickets);
     const pmMap     = buildMap(pmTickets);
+    const ppmMap    = buildMap(ppmTickets);
     const pyCmMap   = buildMap(pyCmTickets);
     const pyLmMap   = buildMap(pyLmTickets);
+    const pyPpmMap  = buildMap(pyPpmTickets);
 
     // 3. Walk customer list, join to all windows, group by rep
     const repData = {};
     Object.keys(repMap).forEach(id => {
-      repData[id] = { ytd: 0, priorYtd: 0, cm: 0, lm: 0, pm: 0, pyCm: 0, pyLm: 0, accounts: [] };
+      repData[id] = { ytd: 0, priorYtd: 0, cm: 0, lm: 0, pm: 0, ppm: 0, pyCm: 0, pyLm: 0, pyPpm: 0, accounts: [], minDaysSince: 999 };
     });
 
     for (const c of allCustomers) {
@@ -978,10 +989,13 @@ router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (r
       d.cm     += cmMap[k]    || 0;
       d.lm     += lmMap[k]    || 0;
       d.pm     += pmMap[k]    || 0;
+      d.ppm    += ppmMap[k]   || 0;
       d.pyCm   += pyCmMap[k]  || 0;
       d.pyLm   += pyLmMap[k]  || 0;
+      d.pyPpm  += pyPpmMap[k] || 0;
       const lastDate  = c.lastSaleDate ? c.lastSaleDate.slice(0, 10) : null;
       const daysSince = lastDate ? Math.floor((Date.now() - new Date(lastDate)) / 86400000) : 999;
+      if (daysSince < d.minDaysSince) d.minDaysSince = daysSince;
       const ytdSales  = ytdMap[k] || 0;
       const priorYtd  = pyYtdMap[k] || 0;
       d.accounts.push({ tier: computeTier(priorYtd > 0 ? ytdSales / priorYtd : 0, daysSince, ytdSales, priorYtd) });
@@ -1005,42 +1019,52 @@ router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (r
 
       const cmGoal  = d.pyCm > 0 ? +(d.pyCm * G).toFixed(2) : null;
       const lmGoal  = d.pyLm > 0 ? +(d.pyLm * G).toFixed(2) : null;
-      const cmOver  = cmGoal !== null ? +(d.cm - cmGoal).toFixed(2) : null;
-      const lmOver  = lmGoal !== null ? +(d.lm - lmGoal).toFixed(2) : null;
-      // Most Improved: lm − pm (only if both have sales)
-      const improvement = (d.lm > 0 && d.pm > 0) ? +(d.lm - d.pm).toFixed(2) : null;
 
       // Pace score: percentage points ahead of / behind monthly pace
       const paceScore  = computePaceScore(d.cm, cmGoal, bdCtx.elapsed, bdCtx.total);
       const pctToGoal  = cmGoal > 0 ? +((d.cm / cmGoal) * 100).toFixed(2) : null;
+      const lmPctToGoal  = lmGoal > 0 ? +((d.lm  / lmGoal)  * 100).toFixed(2) : null;
+      const ppmGoal      = d.pyPpm > 0 ? +(d.pyPpm * G).toFixed(2) : null;
+      const pmPctToGoal  = lmGoal  > 0 ? +((d.pm  / lmGoal)  * 100).toFixed(2) : null; // use lmGoal as denominator (same month type)
+      const ppmPctToGoal = ppmGoal > 0 ? +((d.ppm / ppmGoal) * 100).toFixed(2) : null;
+
+      // Most Improved: percentage-point gain vs prior month (same goal denominator)
+      const improvementPts = (lmGoal > 0 && d.lm > 0 && d.pm > 0)
+        ? +((d.lm - d.pm) / lmGoal * 100).toFixed(1) : null;
+
+      // Most Consistent: sum of negative month-over-month pct-point changes over last 3 months
+      // Lower (less negative) = more consistent. Requires at least 2 of 3 months to have data.
+      const changes = [];
+      if (lmPctToGoal !== null && pmPctToGoal !== null) changes.push(lmPctToGoal - pmPctToGoal);
+      if (pmPctToGoal !== null && ppmPctToGoal !== null) changes.push(pmPctToGoal - ppmPctToGoal);
+      const totalNegative = changes.length >= 1
+        ? +changes.reduce((s, c) => s + Math.min(0, c), 0).toFixed(2)
+        : null;
 
       // Award eligibility: goal must be set AND ≥ $5,000
       const AWARD_FLOOR = 5000;
       const awardEligible = cmGoal !== null && cmGoal >= AWARD_FLOOR;
 
+      const daysIdle = d.minDaysSince < 999 ? d.minDaysSince : null;
+
       return {
         repId, repName,
-        accountCount:    accounts.length,
-        healthScore,
-        ...tiers,
-        // Current month
-        currentMonthSales: +d.cm.toFixed(2),
-        currentMonthGoal:  cmGoal,
-        currentMonthOver:  cmOver,
+        healthyCount:  tiers.Healthy,
         pctToGoal,
-        paceScore:         paceScore !== null ? +paceScore.toFixed(2) : null,
+        lmPctToGoal,
+        improvementPts,
+        totalNegative,
+        paceScore:     paceScore !== null ? +paceScore.toFixed(2) : null,
         awardEligible,
-        // Last completed month
-        lastMonthSales:    +d.lm.toFixed(2),
-        lastMonthGoal:     lmGoal,
-        lastMonthOver:     lmOver,
-        // Prior month (for Most Improved)
-        priorMonthSales:   +d.pm.toFixed(2),
-        improvement,
+        daysIdle,
+        // keep accountCount only for internal sorting — stripped from final payload below
+        _accountCount: accounts.length,
+        _cmGoal:       cmGoal,
+        _lmGoal:       lmGoal,
       };
     });
 
-    const eligibleReps = repStats.filter(r => r.accountCount > 0);
+    const eligibleReps = repStats.filter(r => r._accountCount > 0);
 
     // 5. Compute awards
     // SOTM: ranked by paceScore among award-eligible reps (goal set AND ≥ $5,000)
@@ -1049,40 +1073,49 @@ router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (r
     const sotmWinner = sotmCandidates[0] || null;
     const allUnderGoal = sotmWinner !== null && sotmWinner.paceScore < 0;
 
-    // Most Improved: highest (lm − pm), both months must have data
-    const miCandidates = eligibleReps.filter(r => r.improvement !== null);
-    miCandidates.sort((a, b) => b.improvement - a.improvement);
+    // Most Improved: highest pct-point gain lm vs pm
+    const miCandidates = eligibleReps.filter(r => r.improvementPts !== null);
+    miCandidates.sort((a, b) => b.improvementPts - a.improvementPts);
     const miWinner = miCandidates[0] || null;
+
+    // Most Consistent: least total negative month-over-month pct change over last 3 months
+    const mcCandidates = eligibleReps.filter(r => r.totalNegative !== null);
+    mcCandidates.sort((a, b) => b.totalNegative - a.totalNegative); // closest to 0 = most consistent
+    const mcWinner = mcCandidates[0] || null;
 
     // 6. Current-month podium — award-eligible reps only, ranked by paceScore
     const podiumReps = eligibleReps
       .filter(r => r.awardEligible && r.paceScore !== null)
       .sort((a, b) => b.paceScore - a.paceScore)
-      .slice(0, 3);
+      .slice(0, 3)
+      .map(({ repId, repName, pctToGoal, paceScore }) => ({ repId, repName, pctToGoal, paceScore }));
 
-    // 7. Full standings:
-    //   Group A: award-eligible reps (goal ≥ $5k), sorted by paceScore desc
-    //   Group B: reps with goal < $5k (below floor), sorted by paceScore desc
-    //   Group C: no-goal reps, sorted by sales desc — always at bottom
+    // 7. Full standings — strip all private fields before sending
     const AWARD_FLOOR = 5000;
     const standings = [
       ...eligibleReps
         .filter(r => r.awardEligible && r.paceScore !== null)
         .sort((a, b) => b.paceScore - a.paceScore),
       ...eligibleReps
-        .filter(r => !r.awardEligible && r.currentMonthGoal !== null && r.currentMonthGoal > 0 && r.paceScore !== null)
+        .filter(r => !r.awardEligible && r._cmGoal !== null && r._cmGoal > 0 && r.paceScore !== null)
         .sort((a, b) => b.paceScore - a.paceScore),
       ...eligibleReps
-        .filter(r => r.currentMonthGoal === null || r.currentMonthGoal <= 0)
-        .sort((a, b) => b.currentMonthSales - a.currentMonthSales),
-    ].map((r, i) => ({ ...r, standingsRank: i + 1 }));
+        .filter(r => r._cmGoal === null || r._cmGoal <= 0)
+        .sort((a, b) => (b.pctToGoal || 0) - (a.pctToGoal || 0)),
+    ].map((r, i) => ({
+      standingsRank: i + 1,
+      repId:         r.repId,
+      repName:       r.repName,
+      pctToGoal:     r.pctToGoal,
+      paceScore:     r.paceScore,
+      daysIdle:      r.daysIdle,
+      healthyCount:  r.healthyCount,
+    }));
 
     const payload = {
       updatedAt:         now.toISOString(),
       currentMonthLabel: `${MONTHS[mm]} ${yr}`,
       lastMonthLabel:    `${MONTHS[lmM]} ${lmY}`,
-      priorMonthLabel:   `${MONTHS[pmM]} ${pmY}`,
-      // Business-day context for the current month — used by frontend pace indicator
       businessDays: {
         elapsed:    bdCtx.elapsed,
         total:      bdCtx.total,
@@ -1090,30 +1123,26 @@ router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (r
       },
       awards: {
         sotm: sotmWinner ? {
-          repId:        sotmWinner.repId,
-          repName:      sotmWinner.repName,
-          paceScore:    sotmWinner.paceScore,
-          overGoal:     sotmWinner.currentMonthOver,
-          sales:        sotmWinner.currentMonthSales,
-          goal:         sotmWinner.currentMonthGoal,
-          pctToGoal:    sotmWinner.pctToGoal,
+          repId:       sotmWinner.repId,
+          repName:     sotmWinner.repName,
+          pctToGoal:   sotmWinner.pctToGoal,
           allUnderGoal,
-          inProgress:   true,
+          inProgress:  true,
         } : null,
         mostImproved: miWinner ? {
-          repId:        miWinner.repId,
-          repName:      miWinner.repName,
-          improvement:  miWinner.improvement,
-          lastMonthSales:  miWinner.lastMonthSales,
-          priorMonthSales: miWinner.priorMonthSales,
+          repId:          miWinner.repId,
+          repName:        miWinner.repName,
+          improvementPts: miWinner.improvementPts,
+        } : null,
+        mostConsistent: mcWinner ? {
+          repId:         mcWinner.repId,
+          repName:       mcWinner.repName,
+          totalNegative: mcWinner.totalNegative,
         } : null,
       },
-      podium:    podiumReps,
+      podium:   podiumReps,
       standings,
-      totalAccounts: eligibleReps.reduce((s, r) => s + r.accountCount, 0),
-      repCount:      eligibleReps.length,
-      // last-month territory revenue (for stat strip)
-      lastMonthTerritoryRevenue: +eligibleReps.reduce((s, r) => s + r.lastMonthSales, 0).toFixed(2),
+      repCount: eligibleReps.length,
     };
 
     leaderboardCache.data = payload;

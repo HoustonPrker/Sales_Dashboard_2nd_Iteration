@@ -994,12 +994,13 @@ function buildCatTable(catData) {
   const rows = sorted.map(c => {
     const dBg      = c.dollarChange >= 0 ? 'rgba(22,163,74,0.10)' : 'rgba(220,38,38,0.10)';
     const dCl      = c.dollarChange >= 0 ? '#059669' : '#dc2626';
-    const catLabel = c.description || c.categoryCode;
+    const catFull  = c.description || c.categoryCode;
+    const catLabel = catFull.length > 15 ? catFull.slice(0, 15).trimEnd() + '…' : catFull;
     const isSel    = c.categoryCode === caSelectedCategory;
     const rowStyle = isSel ? 'background:#ccfbf1;border-left:3px solid #0f766e' : 'border-left:3px solid transparent';
     return `<tr data-category="${c.categoryCode}" style="${rowStyle}">
       <td class="cat-name-cell">
-        <a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}','best')" title="View top sellers">${catLabel}</a>
+        <a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}','best')" title="${catFull}">${catLabel}</a>
       </td>
       <td class="num-ctr">${fmt$(c.currentYtdAmt)}</td>
       <td class="num-ctr">${c.currentQty > 0 ? `<a class="acct-name-link" onclick="openCategoryDrill('${caCustNo}','${c.categoryCode}','ytd')" title="View YTD items" style="font-weight:700">${Math.round(c.currentQty).toLocaleString()}</a>` : '—'}</td>
@@ -1289,7 +1290,7 @@ function renderItemDrill() {
     const rows = list.map(i => `<tr>
       <td style="padding:8px 10px;color:#9ca3af;text-align:center;width:36px">${i.rank}</td>
       <td style="padding:8px 10px;text-align:center;width:48px">${statusBadge(i.status)}</td>
-      <td style="padding:8px 10px">${itemLink(i.itemNo)}</td>
+      <td style="padding:8px 10px;text-align:center">${itemLink(i.itemNo)}</td>
       <td style="padding:8px 10px">${i.description || '—'}</td>
       <td class="num-ctr" style="padding:8px 10px;color:#6b7280">${i.prior_qty > 0 ? i.prior_qty : '—'}</td>
       <td class="num-ctr" style="padding:8px 10px;font-weight:700;color:#1a2332">${i.current_qty > 0 ? i.current_qty : '—'}</td>
@@ -1306,13 +1307,13 @@ function renderItemDrill() {
 
     tableHTML = `<table class="data-table">
       <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
-        ${th('rank',        '#',    'num-ctr')}
-        ${th('status',      'Stat', 'num-ctr')}
-        ${th('itemNo',      'Item #')}
+        ${th('rank',        '#',         'num-ctr')}
+        ${th('status',      'Stat',      'num-ctr')}
+        ${th('itemNo',      'Item #',    'num-ctr')}
         ${th('description', 'Description')}
-        ${th('prior_qty',   'LYTD',        'num-ctr')}
-        ${th('current_qty', 'YTD',         'num-ctr')}
-        ${th('cadence',     'Frequency', '', 'white-space:nowrap')}
+        ${th('prior_qty',   'LYTD',      'num-ctr')}
+        ${th('current_qty', 'YTD',       'num-ctr')}
+        ${th('cadence',     'Frequency', '',        'white-space:nowrap')}
       </tr></thead>
       <tbody>${rows}</tbody>
       ${totRow ? `<tfoot>${totRow}</tfoot>` : ''}
@@ -1331,21 +1332,21 @@ function renderItemDrill() {
       return `<tr style="${notBuying ? 'background:#fff8f0' : ''}">
         <td style="padding:8px 10px;color:#9ca3af;text-align:center;width:36px">${i.rank}</td>
         <td style="padding:8px 10px;text-align:center;width:48px">${statusBadge(i.status)}</td>
-        <td style="padding:8px 10px">${itemLink(i.itemNo)}</td>
+        <td style="padding:8px 10px;text-align:center">${itemLink(i.itemNo)}</td>
         <td style="padding:8px 10px">${i.description || '—'}</td>
         <td class="num-ctr" style="padding:8px 10px;font-weight:${i.qty_12mo > 0 ? '700' : '400'};color:${i.qty_12mo > 0 ? '#1a2332' : '#9ca3af'}">${i.qty_12mo > 0 ? i.qty_12mo : '—'}</td>
-        <td style="padding:8px 10px"><span style="${lastStyle}">${i.last_sold || 'N/A'}</span></td>
+        <td style="padding:8px 10px;text-align:center"><span style="${lastStyle}">${i.last_sold || 'N/A'}</span></td>
       </tr>`;
     }).join('') || '<tr><td colspan="6" style="color:#9ca3af;padding:24px;text-align:center">No best-seller items found for this category.</td></tr>';
 
     tableHTML = `<table class="data-table">
       <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
-        ${th('rank',        '#',           'num-ctr')}
-        ${th('status',      'Stat',        'num-ctr')}
-        ${th('itemNo',      'Item #')}
+        ${th('rank',        '#',             'num-ctr')}
+        ${th('status',      'Stat',          'num-ctr')}
+        ${th('itemNo',      'Item #',        'num-ctr')}
         ${th('description', 'Description')}
-        ${th('qty_12mo',    '12 MO Qty',   'num-ctr')}
-        ${th('last_sold',   'Last Purchase')}
+        ${th('qty_12mo',    '12 MO Qty',     'num-ctr')}
+        ${th('last_sold',   'Last Purchase', 'num-ctr')}
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -1892,7 +1893,7 @@ function buildOrderHistory(orders) {
   const rows = sorted.map(o => {
     const date    = fmtDate(o.date);
     const amt     = fmt$(parseFloat(o.amount || 0));
-    const items   = o.itemCount ? `${o.itemCount} items` : '—';
+    const items   = o.itemCount ? `${o.itemCount}` : '—';
     const tktEsc  = (o.ticketNo || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
     const custEsc = (caCustNo || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,"\\'");
     const tktJs   = (o.ticketNo || '').replace(/'/g,"\\'");
@@ -1900,26 +1901,21 @@ function buildOrderHistory(orders) {
       onclick="loadOrderDetail('${custEsc}','${tktJs}')"
       style="cursor:pointer;transition:background 0.12s"
       onmouseover="this.style.background='#f0f4f8'" onmouseout="this.style.background=''">
-      <td style="font-size:13px;color:#6b7280">${date}</td>
-      <td style="font-family:monospace;font-size:12px;color:#3d5a80;font-weight:600">${tktEsc}</td>
-      <td style="font-size:13px">${items}</td>
-      <td class="num-ctr" style="font-weight:600">${amt}</td>
-      <td style="font-size:12px;color:#9ca3af;text-align:right;padding-right:12px">View →</td>
+      <td style="font-size:13px;color:#6b7280;text-align:center">${date}</td>
+      <td style="font-family:monospace;font-size:12px;color:#3d5a80;font-weight:600;text-align:center">${tktEsc}</td>
+      <td style="font-size:13px;text-align:center">${items}</td>
+      <td class="num-ctr" style="font-weight:600;text-align:center">${amt}</td>
+      <td style="font-size:12px;color:#9ca3af;text-align:center;padding-right:12px">View →</td>
     </tr>`;
   }).join('');
-
-  const thTip = (label, html) =>
-    `<th><span style="display:inline-flex;align-items:center;gap:4px">${label}<span class="kpi-info-wrap col-tip-wrap"><span class="kpi-info-icon">i<span class="kpi-tooltip-box col-tip-box">${html}</span></span></span></span></th>`;
-  const thTipCtr = (label, html) =>
-    `<th class="num-ctr"><span style="display:inline-flex;align-items:center;gap:4px;justify-content:center">${label}<span class="kpi-info-wrap col-tip-wrap"><span class="kpi-info-icon">i<span class="kpi-tooltip-box col-tip-box">${html}</span></span></span></span></th>`;
 
   return `<div class="inv-wrap" style="max-height:500px;overflow-y:auto;border-top:1px solid #f3f4f6">
     <table class="data-table" id="ca-orders-table">
       <thead><tr>
-        ${thTip('Date',     '<strong>Order Date</strong><br>The business date the transaction<br>was entered in NCR (MM-DD-YYYY).')}
-        ${thTip('Ticket #', '<strong>Ticket Number</strong><br>NCR point-of-sale ticket ID.<br>Click any row to view line-item detail.')}
-        ${thTipCtr('Items', '<strong>Line Items</strong><br>Number of distinct product lines<br>on this order.')}
-        ${thTipCtr('Total', '<strong>Order Total</strong><br>Sale subtotal for this ticket<br>(pre-tax, from NCR SaleSubtotal).')}
+        <th style="text-align:center">Date</th>
+        <th style="text-align:center">Ticket #</th>
+        <th style="text-align:center">Lines</th>
+        <th class="num-ctr">Total</th>
         <th></th>
       </tr></thead>
       <tbody>${rows}</tbody>

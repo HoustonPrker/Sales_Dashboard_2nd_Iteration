@@ -9,88 +9,141 @@
 
     body {
       min-height: 100vh;
+      width: 100vw;
+      background-image: url('/assets/login-background.jpeg');
+      background-size: cover;
+      background-position: center center;
+      background-repeat: no-repeat;
+      background-color: #fafaf9;
       display: flex;
       align-items: center;
-      justify-content: center;
-      background: linear-gradient(135deg, #1a2332 0%, #2d3f55 100%);
+      justify-content: flex-end;
+      padding-right: 16vw;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      padding: 20px;
+      position: relative;
+      box-sizing: border-box;
     }
 
-    .card {
-      background: #fff;
-      border-radius: 12px;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.35), 0 4px 16px rgba(0,0,0,0.2);
-      width: 420px;
-      max-width: 100%;
-      padding: 40px 36px 36px;
-    }
+    /* ── Brand / tagline ────────────────────────────────── */
 
-    .logo-area {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 32px;
-    }
-
-    .logo-circle {
-      width: 56px;
-      height: 56px;
-      border-radius: 50%;
-      background: #0d9488;
+    .login-brand {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 52vw;
+      height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 18px;
-      font-weight: 800;
-      color: #fff;
-      letter-spacing: 0.5px;
+      padding: 0 5vw;
+      box-sizing: border-box;
+      z-index: 1;
+      pointer-events: none;
     }
 
-    .logo-title {
-      font-size: 22px;
-      font-weight: 700;
-      color: #1a2332;
-      letter-spacing: -0.3px;
+    .login-tagline {
+      color: #ffffff;
+      text-align: left;
+      max-width: 600px;
     }
 
-    .logo-subtitle {
-      font-size: 13px;
-      color: #6b7280;
-      margin-top: -4px;
-    }
-
-    .form-group {
-      margin-bottom: 18px;
-    }
-
-    label {
+    .tagline-eyebrow {
       display: block;
-      font-size: 13px;
-      font-weight: 600;
-      color: #374151;
-      margin-bottom: 6px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 12px;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.7);
+      margin-bottom: 20px;
+      font-weight: 500;
     }
 
-    input[type="text"],
-    input[type="password"] {
+    .tagline-text {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(64px, 8.5vw, 140px);
+      font-weight: 400;
+      line-height: 1.0;
+      letter-spacing: -0.025em;
+      color: #ffffff;
+      margin: 0 0 24px 0;
+      -webkit-text-stroke: 1px rgba(0, 0, 0, 0.85);
+      text-shadow:
+        0 2px 18px rgba(0, 0, 0, 0.55),
+        0 4px 32px rgba(0, 0, 0, 0.35),
+        0 1px 2px rgba(0, 0, 0, 0.6);
+    }
+
+    .tagline-sub {
+      font-size: 26px;
+      line-height: 1.55;
+      color: #ffffff;
+      max-width: 380px;
+      font-weight: 400;
+      text-shadow:
+        0 2px 18px rgba(0, 0, 0, 0.55),
+        0 4px 32px rgba(0, 0, 0, 0.35),
+        0 1px 2px rgba(0, 0, 0, 0.6);
+    }
+
+    /* ── Login form ─────────────────────────────────────── */
+
+    .login-form {
+      width: 520px;
+      max-width: 100%;
+      text-align: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .login-title {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 44px;
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      margin: 0 0 36px 0;
+      color: #0c0a09;
+      text-align: center;
+    }
+
+    .login-fields {
+      background: #ffffff;
+      border: 1px solid #e7e5e4;
+      border-radius: 14px;
+      padding: 36px 40px;
+      box-shadow:
+        0 1px 3px rgba(0, 0, 0, 0.04),
+        0 16px 40px rgba(15, 23, 42, 0.1);
+      text-align: left;
+    }
+
+    .login-field {
+      margin-bottom: 20px;
+    }
+
+    .login-field label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      color: #44403c;
+      margin-bottom: 8px;
+    }
+
+    .login-field input {
       width: 100%;
-      padding: 10px 14px;
-      border: 1.5px solid #d1d5db;
-      border-radius: 8px;
-      font-size: 15px;
+      border: 1px solid #e7e5e4;
+      border-radius: 10px;
+      padding: 16px 18px;
+      font-size: 17px;
       font-family: inherit;
-      color: #1a2332;
-      background: #fff;
+      background: #fafaf9;
+      color: #0c0a09;
+      transition: border-color 0.15s, background-color 0.15s;
       outline: none;
-      transition: border-color 0.15s, box-shadow 0.15s;
     }
 
-    input[type="text"]:focus,
-    input[type="password"]:focus {
-      border-color: #0d9488;
-      box-shadow: 0 0 0 3px rgba(13,148,136,0.12);
+    .login-field input:focus {
+      border-color: #0f766e;
+      background: #ffffff;
     }
 
     .password-wrap {
@@ -98,12 +151,12 @@
     }
 
     .password-wrap input {
-      padding-right: 44px;
+      padding-right: 48px;
     }
 
     .toggle-pw {
       position: absolute;
-      right: 12px;
+      right: 14px;
       top: 50%;
       transform: translateY(-50%);
       background: none;
@@ -116,98 +169,149 @@
       transition: color 0.15s;
     }
 
-    .toggle-pw:hover { color: #374151; }
+    .toggle-pw:hover { color: #44403c; }
 
-    .error-msg {
+    .login-error {
       display: none;
       background: #fef2f2;
-      border: 1px solid #fca5a5;
-      border-radius: 8px;
-      color: #b91c1c;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+      padding: 10px 12px;
+      border-radius: 6px;
       font-size: 13px;
-      padding: 10px 14px;
-      margin-bottom: 18px;
+      margin-bottom: 16px;
     }
 
-    .error-msg.visible { display: block; }
+    .login-error.visible { display: block; }
 
-    .btn-login {
+    .login-submit {
       width: 100%;
-      padding: 12px;
-      background: #0d9488;
-      color: #fff;
+      background: #0f766e;
+      color: #ffffff;
       border: none;
-      border-radius: 8px;
-      font-size: 15px;
+      padding: 16px 18px;
+      border-radius: 10px;
+      font-size: 17px;
       font-weight: 600;
       font-family: inherit;
+      margin-top: 28px;
       cursor: pointer;
-      transition: background 0.15s, opacity 0.15s;
-      letter-spacing: 0.2px;
+      transition: background-color 0.15s;
+      letter-spacing: 0.1px;
     }
 
-    .btn-login:hover:not(:disabled) { background: #0f766e; }
-    .btn-login:disabled { opacity: 0.65; cursor: not-allowed; }
+    .login-submit:hover:not(:disabled) { background: #0e6b63; }
+    .login-submit:active:not(:disabled) { background: #0c5e57; }
+    .login-submit:disabled {
+      background: #14b8a6;
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
 
-    .btn-login .spinner {
+    .login-submit .spinner {
       display: inline-block;
-      width: 14px;
-      height: 14px;
+      width: 15px;
+      height: 15px;
       border: 2px solid rgba(255,255,255,0.4);
       border-top-color: #fff;
       border-radius: 50%;
       animation: spin 0.7s linear infinite;
       vertical-align: middle;
-      margin-right: 6px;
+      margin-right: 7px;
     }
 
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    .login-meta {
+      margin-top: 30px;
+      color: #78716c;
+      font-size: 13px;
+    }
+
+    /* ── Responsive ─────────────────────────────────────── */
+
+    @media (max-width: 1280px) {
+      .tagline-text {
+        font-size: clamp(48px, 6vw, 96px);
+      }
+      .login-title {
+        font-size: 36px;
+      }
+      .login-form {
+        width: 480px;
+      }
+      body {
+        padding-right: 5vw;
+      }
+    }
+
+    @media (max-width: 900px) {
+      .login-brand {
+        display: none;
+      }
+      body {
+        justify-content: center;
+        padding: 24px;
+        background-color: rgba(250, 250, 249, 0.92);
+        background-blend-mode: lighten;
+      }
+      .login-form {
+        width: 100%;
+        max-width: 460px;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="logo-area">
-      <div class="logo-circle">KS</div>
-      <div class="logo-title">Kellis Sales</div>
-      <div class="logo-subtitle">Sales Intelligence Platform</div>
+  <div class="login-brand">
+    <div class="login-tagline">
+      <h1 class="tagline-text">We Give More.</h1>
+      <div class="tagline-sub">Built for the people who keep hospital gift shops running.</div>
     </div>
+  </div>
+
+  <div class="login-form">
+    <div class="login-title">Kellis Sales Console</div>
 
     <form id="login-form">
-      <div class="form-group">
-        <label for="username">Counterpoint Username</label>
-        <input type="text" id="username" name="username" autocomplete="username"
-               placeholder="e.g. HOUSTONP" required autofocus style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
-      </div>
+      <div class="login-fields">
+        <div class="login-error" id="error-msg"></div>
 
-      <div class="form-group">
-        <label for="password">Password</label>
-        <div class="password-wrap">
-          <input type="password" id="password" name="password" autocomplete="current-password"
-                 placeholder="Enter your password" required>
-          <button type="button" class="toggle-pw" id="toggle-pw-btn" onclick="togglePassword()" title="Show/hide password" aria-label="Toggle password visibility">
-            <!-- Eye icon -->
-            <svg id="eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-              <circle cx="12" cy="12" r="3"></circle>
-            </svg>
-            <!-- Eye-off icon (hidden by default) -->
-            <svg id="eye-off-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
-              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
-              <line x1="1" y1="1" x2="23" y2="23"></line>
-            </svg>
-          </button>
+        <div class="login-field">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" autocomplete="username"
+                 placeholder="HOUSTONP" required autofocus
+                 style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
         </div>
+
+        <div class="login-field">
+          <label for="password">Password</label>
+          <div class="password-wrap">
+            <input type="password" id="password" name="password" autocomplete="current-password"
+                   placeholder="Enter your password" required>
+            <button type="button" class="toggle-pw" id="toggle-pw-btn" onclick="togglePassword()" title="Show/hide password" aria-label="Toggle password visibility">
+              <svg id="eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+              <svg id="eye-off-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
+                <line x1="1" y1="1" x2="23" y2="23"></line>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="submit" class="login-submit" id="login-btn">Sign In</button>
       </div>
-
-      <div class="error-msg" id="error-msg"></div>
-
-      <button type="submit" class="btn-login" id="login-btn">Sign In</button>
     </form>
+
+    <div class="login-meta">Need access? <a href="mailto:support@kellis.com?subject=Kellis%20Sales%20Console%20Access%20Request&body=Hello%2C%0A%0AI%20am%20requesting%20access%20to%20the%20Kellis%20Sales%20Console.%0A%0AThank%20you." style="color:#0f766e;text-decoration:underline;font-weight:500">Contact</a> your administrator.</div>
   </div>
 
   <script>
-    // Redirect if already logged in (cookie-based — just check /auth/me)
+    // Redirect if already logged in
     (function() {
       fetch('/auth/me')
         .then(function(r) { if (r.ok) window.location.href = '/'; })
@@ -215,7 +319,7 @@
     })();
 
     function togglePassword() {
-      const inp = document.getElementById('password');
+      const inp    = document.getElementById('password');
       const eyeOn  = document.getElementById('eye-icon');
       const eyeOff = document.getElementById('eye-off-icon');
       if (inp.type === 'password') {
@@ -229,27 +333,6 @@
       }
     }
 
-    function showError(msg) {
-      const el = document.getElementById('error-msg');
-      el.textContent = msg;
-      el.classList.add('visible');
-    }
-
-    function hideError() {
-      document.getElementById('error-msg').classList.remove('visible');
-    }
-
-    function setLoading(loading) {
-      const btn = document.getElementById('login-btn');
-      if (loading) {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span>Signing in…';
-      } else {
-        btn.disabled = false;
-        btn.textContent = 'Sign In';
-      }
-    }
-
     document.getElementById('login-form').addEventListener('submit', async function(e) {
       e.preventDefault();
       const username = document.getElementById('username').value.trim();
@@ -257,8 +340,8 @@
       const btn      = document.getElementById('login-btn');
       const errEl    = document.getElementById('error-msg');
 
-      btn.disabled   = true;
-      btn.innerHTML  = '<span class="spinner"></span>Signing in…';
+      btn.disabled  = true;
+      btn.innerHTML = '<span class="spinner"></span>Signing in…';
       errEl.classList.remove('visible');
 
       try {
@@ -271,17 +354,16 @@
         if (!r.ok) {
           errEl.textContent = data.error || 'Invalid credentials';
           errEl.classList.add('visible');
-          btn.disabled      = false;
-          btn.textContent   = 'Sign In';
+          btn.disabled    = false;
+          btn.textContent = 'Sign In';
           return;
         }
-        // Cookie is set by server automatically — just redirect
         window.location.href = '/';
       } catch {
         errEl.textContent = 'Could not reach the server. Check your connection.';
         errEl.classList.add('visible');
-        btn.disabled      = false;
-        btn.textContent   = 'Sign In';
+        btn.disabled    = false;
+        btn.textContent = 'Sign In';
       }
     });
   </script>

@@ -185,7 +185,7 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 /* Left column: natural content height — never stretched */
 #ca-cat-panel { min-width: 0; }
 #ca-cat-panel .card { display: flex; flex-direction: column; min-width: 0; }
-#ca-cat-panel .inv-wrap { overflow: auto; }
+#ca-cat-panel .inv-wrap { overflow: visible; }
 
 /* Right column: height set by JS to match left; two peer cards fill it via flex */
 #ca-right-col { overflow: hidden; }
@@ -197,7 +197,7 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 #ca-drill-content thead th { position: sticky; top: 0; z-index: 2; background: #3d5a80; }
 
 /* ── Category table specific ──────────────── */
-.cat-name-cell { font-size: 15px; font-weight: 600; white-space: nowrap; }
+.cat-name-cell { font-size: 15px; font-weight: 600; white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
 .cat-top5 > td:first-child { border-left: 3px solid #3d5a80; padding-left: 11px; }
 .cat-group-end td { border-bottom: 2px solid #d1d5db; }
 
@@ -227,22 +227,34 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 .acct-grid-wrap .data-table th .col-drag-handle { display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin: 0; font-size: 12px; opacity: 0.7; }
 .acct-grid-wrap .data-table th .sort-icon { font-size: 10px; opacity: 0.9; }
 /* ── Pinned Customer Name column ─────────────────────────────── */
-/* Header cell — sits at intersection of sticky-top + sticky-left */
+/* border-collapse:separate eliminates shared borders at the sticky/scrolling seam,
+   which prevents colored content from adjacent cells bleeding through in Chromium.
+   border-spacing:0 keeps the visual layout identical to collapse mode. */
+.acct-grid-wrap .data-table { border-collapse: separate; border-spacing: 0; }
+/* Regular body cells need position:relative so z-index applies */
+.acct-grid-wrap .data-table tbody td { position: relative; z-index: 1; }
+/* Header cell — sticky on both axes (top + left corner) */
 .acct-grid-wrap .data-table th[data-col-id="name"] {
-  position: sticky; left: 0; z-index: 5; background: #3d5a80;
-  box-shadow: 2px 0 6px rgba(0,0,0,0.10);
+  position: sticky; left: 0; z-index: 6; background: #3d5a80;
+  box-shadow: 4px 0 6px -2px rgba(0,0,0,0.15);
+}
+/* Filter row pinned cell */
+.acct-grid-wrap .acft-row td[data-col-id="name"] {
+  position: sticky; left: 0; z-index: 5; background: #f0f2f5;
+  box-shadow: 4px 0 6px -2px rgba(0,0,0,0.08);
 }
 /* Data cells */
 .acct-grid-wrap .data-table tbody td.acct-pin-col {
-  position: sticky; left: 0; z-index: 2;
+  position: sticky; left: 0; z-index: 4; background: #ffffff;
   max-width: 260px; overflow: hidden; text-overflow: ellipsis;
-  box-shadow: 2px 0 6px rgba(0,0,0,0.07);
+  box-shadow: 4px 0 6px -2px rgba(0,0,0,0.08);
 }
+.acct-grid-wrap .data-table tbody tr:nth-child(even) td.acct-pin-col { background: #f8f9fb; }
 .acct-grid-wrap .data-table tbody tr:hover td.acct-pin-col { background: #f0f4f8 !important; }
 /* Totals bar pinned cell */
 #acct-totals-bar td.acct-pin-col {
-  position: sticky; left: 0; z-index: 2; background: #dde4ee;
-  box-shadow: 2px 0 6px rgba(0,0,0,0.07);
+  position: sticky; left: 0; z-index: 4; background: #dde4ee;
+  box-shadow: 4px 0 6px -2px rgba(0,0,0,0.10);
 }
 .data-table tr.acct-totals-row { background: #dde4ee; }
 .data-table tr.acct-totals-row td { background: #dde4ee; color: #1a2332; font-weight: 700; font-size: 13px; border-top: 2px solid #b8c4d8; border-bottom: none; padding: 10px 14px; }

@@ -317,11 +317,11 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
     if (l.isRepeat)     tags.push(tagPill('↻ Repeat', '#99f6e4', '#0f766e'));
     else if (l.isRepeat !== undefined) tags.push(tagPill('+ New', '#bfdbfe', '#1e40af'));
     return `<tr>
-      <td style="padding:8px 12px;font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80;white-space:nowrap">${l.itemNo}</td>
-      <td style="padding:8px 12px;font-size:12px;color:#6b7280;white-space:nowrap">${l.category || '—'}</td>
+      <td style="padding:8px 12px;font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80;white-space:nowrap;text-align:center">${l.itemNo}</td>
+      <td style="padding:8px 12px;font-size:12px;color:#6b7280;white-space:nowrap;text-align:center">${l.category || '—'}</td>
       <td style="padding:8px 12px;font-size:13px">${l.description || '—'}</td>
-      <td style="padding:8px 12px;min-width:100px">
-        <div style="display:flex;gap:4px;flex-wrap:wrap">${tags.join('') || ''}</div>
+      <td style="padding:8px 12px;min-width:100px;text-align:center">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center">${tags.join('') || ''}</div>
       </td>
       <td class="num-ctr" style="padding:8px 12px;font-size:13px">${l.qty}</td>
       <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:#6b7280">${l.unitPrice > 0 ? f(l.unitPrice) : '—'}</td>
@@ -345,10 +345,10 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
   return `<table class="data-table">
     <thead style="position:sticky;top:0;z-index:2;background:#fff">
       <tr>
-        ${th('item', 'Item #')}
-        ${th('cat',  'Category')}
+        ${th('item', 'Item #',   'num-ctr')}
+        ${th('cat',  'Category', 'num-ctr')}
         ${th('desc', 'Description')}
-        <th>Tags</th>
+        <th style="text-align:center">Tags</th>
         ${th('qty',    'Qty',      'num-ctr')}
         ${th('unit',   'Unit $',   'num-ctr')}
         ${th('ext',    'Ext $',    'num-ctr')}
