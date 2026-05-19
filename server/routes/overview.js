@@ -28,8 +28,12 @@ router.get('/rep-overview', async (req, res) => {
     if (!rep) return res.status(400).json({ error: 'rep param required' });
 
     if (overviewCache[rep] && Date.now() - overviewCache[rep].ts < CACHE_TTL) {
-      console.log(`⏱  GET /proxy/rep-overview → cache hit (${rep})`);
-      return res.json(overviewCache[rep].data);
+      // Don't serve a cached zero-result for ALL — those were from before this fix
+      const cached = overviewCache[rep].data;
+      if (rep !== 'ALL' || (cached.monthly && cached.monthly.mtd > 0)) {
+        console.log(`⏱  GET /proxy/rep-overview → cache hit (${rep})`);
+        return res.json(cached);
+      }
     }
 
     const t0    = Date.now();
@@ -58,6 +62,7 @@ router.get('/rep-overview', async (req, res) => {
     const pyYtdEnd   = `${yr - 1}-${mm}-${dd}`;
 
     const repEnc   = encodeURIComponent(rep);
+    const isAll    = rep === 'ALL';
     const pyMonthCacheKey = `${yr - 1}-${mm}`;
 
     // pyMonthTickets: use shared global cache (no SalesRep filter — same logic as /proxy/accounts).
@@ -69,26 +74,30 @@ router.get('/rep-overview', async (req, res) => {
         ).then(data => { pyMonthGlobalCache[pyMonthCacheKey] = { data, ts: Date.now() }; return data; });
 
     // Phase 1 — fire all independent fetches in parallel
-    const repFilter = `filter=salesRep:eq:${repEnc}&`;
+    // When rep=ALL (admin), omit SalesRep filter so all reps' data is included
+    const repSalesFilter = isAll ? '' : `salesRep:eq:${repEnc},`;
+    const repTktFilter   = isAll ? '' : `SalesRep:eq:${repEnc},`;
+    const custRepFilter  = isAll ? '' : `filter=salesRep:eq:${repEnc}&`;
+
     const [cyDays, repCustomers, pyYtdDays, mtdTickets, pyMonthAllTickets, tickets180] = await Promise.all([
       // CY YTD daily rows (for avg ticket/lines)
       fetchAllPages(
-        `/api/v1/sales-analysis/by-sales-rep?filter=salesRep:eq:${repEnc},postDate:gte:${ytdStart},postDate:lte:${today}&fields=postDate,ticketCount,saleSubTotal,saleLines&pageSize=200`
+        `/api/v1/sales-analysis/by-sales-rep?filter=${repSalesFilter}postDate:gte:${ytdStart},postDate:lte:${today}&fields=postDate,ticketCount,saleSubTotal,saleLines&pageSize=200`
       ),
       // Current customer list — needed to scope pyMonth tickets to this rep's accounts
-      fetchAllPages(`/api/v1/Customers?${repFilter}fields=custNo&pageSize=200`),
+      fetchAllPages(`/api/v1/Customers?${custRepFilter}fields=custNo&pageSize=200`),
       // PY YTD daily rows (for avg ticket/lines prior year)
       fetchAllPages(
-        `/api/v1/sales-analysis/by-sales-rep?filter=salesRep:eq:${repEnc},postDate:gte:${pyYtdStart},postDate:lte:${pyYtdEnd}&fields=postDate,ticketCount,saleSubTotal,saleLines&pageSize=200`
+        `/api/v1/sales-analysis/by-sales-rep?filter=${repSalesFilter}postDate:gte:${pyYtdStart},postDate:lte:${pyYtdEnd}&fields=postDate,ticketCount,saleSubTotal,saleLines&pageSize=200`
       ),
       // MTD ticket headers — source of MTD total, active accounts, avg lines, % invoiced
       fetchAllPages(
-        `/api/v1/pos/ticket-history?filter=SalesRep:eq:${repEnc},BusinessDate:gte:${mtdStart},BusinessDate:lte:${today}&fields=TicketNo,Total,SaleLines,CustNo,CustPoNo,BusinessDate&pageSize=200`
+        `/api/v1/pos/ticket-history?filter=${repTktFilter}BusinessDate:gte:${mtdStart},BusinessDate:lte:${today}&fields=TicketNo,Total,SaleLines,CustNo,CustPoNo,BusinessDate&pageSize=200`
       ),
       pyMonthAllPromise,
       // 180-day window — unique CustNos for "active accounts" KPI
       fetchAllPages(
-        `/api/v1/pos/ticket-history?filter=SalesRep:eq:${repEnc},BusinessDate:gte:${date180},BusinessDate:lte:${today}&fields=CustNo&pageSize=500`
+        `/api/v1/pos/ticket-history?filter=${repTktFilter}BusinessDate:gte:${date180},BusinessDate:lte:${today}&fields=CustNo&pageSize=500`
       ),
     ]);
 

@@ -200,6 +200,9 @@ function renderCA(cust, catData, mtd, orders) {
   const state     = cust.state || '—';
   const salesRep  = cust.salesRep || '—';
   const segment   = cust.categoryCode || '—';
+  const phone       = cust.phone1 || cust.phone || cust.phoneNumber || null;
+  const email       = cust.email1 || cust.email || cust.emailAddress || null;
+  const phoneRole   = cust.contc_title_1 || cust.phone_label || null;
   const rawDiscount = cust.best_price_code || cust.USER_BEST_PRICE_COD_CUST || null;
   const discountStr = (() => {
     if (!rawDiscount) return 'No Discount';
@@ -366,11 +369,22 @@ function renderCA(cust, catData, mtd, orders) {
         <span style="color:#9ca3af;margin:0 8px">/</span>
         <span style="color:#1a2332;font-weight:600">${name}</span>
       </div>
-      <button onclick="openProductListModal('${custNo.replace(/'/g,"\\'")}','${name.replace(/'/g,"\\'")}')"
-        style="display:flex;align-items:center;gap:7px;background:#0d9488;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
-        Generate Product List
-      </button>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        ${phone ? `<a href="tel:${phone.replace(/\D/g,'')}" class="contact-pill" title="${phone}">
+          <svg class="cp-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.4 2 2 0 0 1 3.6 1.22h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.03z"/></svg>
+          <span>${phone}</span>
+          ${phoneRole ? `<span class="cp-meta">${phoneRole}</span>` : ''}
+        </a>` : ''}
+        ${email ? `<a href="mailto:${email}" class="contact-pill" title="${email}">
+          <svg class="cp-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          <span>${email}</span>
+        </a>` : ''}
+        <button onclick="openProductListModal('${custNo.replace(/'/g,"\\'")}','${name.replace(/'/g,"\\'")}')"
+          style="display:flex;align-items:center;gap:7px;background:#0d9488;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
+          Generate Product List
+        </button>
+      </div>
     </div>
 
     <!-- Combined customer identity + KPI panel -->
@@ -517,7 +531,7 @@ function renderCA(cust, catData, mtd, orders) {
 
           <!-- Right: 6-month bar chart -->
           <div style="flex:1;min-width:0;display:flex;flex-direction:column;border:1px solid #e7e5e4;border-radius:6px;padding:10px 12px">
-            <div style="text-align:center;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80;margin-bottom:8px">Last 6 Months</div>
+            <div style="text-align:center;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80;margin-bottom:8px">Last 12 Months</div>
             <div style="flex:1;min-height:0;position:relative">
               <canvas id="ca-bar-canvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
             </div>
@@ -759,14 +773,14 @@ function renderCACharts(catData, orders) {
     donutCtx.style.cursor = 'pointer';
   }
 
-  // ── Bar chart: last 6 months of sales ────────────────────────
+  // ── Bar chart: last 12 months of sales ────────────────────────
   const barCtx = document.getElementById('ca-bar-canvas');
   if (barCtx && orders.length) {
     const now   = new Date();
     const allMonthLabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    // Build last-6-months window (may span prior year)
+    // Build last-12-months window (may span prior year)
     const months = [];
-    for (let i = 5; i >= 0; i--) {
+    for (let i = 12; i >= 1; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
       months.push({ year: d.getFullYear(), month: d.getMonth(), label: allMonthLabels[d.getMonth()] });
     }
@@ -791,6 +805,8 @@ function renderCACharts(catData, orders) {
         datasets: [{
           data: totals,
           backgroundColor: months.map((_, i) => getSequentialColor(i)),
+          borderColor: '#000000',
+          borderWidth: 2,
           borderRadius: 4,
           borderSkipped: false,
         }]

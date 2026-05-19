@@ -8,3 +8,4 @@ node_modules/
 logs/
 scripts/__pycache__/
 .claude
+server/data/accounts-cache.json

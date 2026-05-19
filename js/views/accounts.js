@@ -8,8 +8,17 @@ let acctSortCol    = 'ytdSales', acctSortDir = 'desc';
 let acctTierFilter = 'All';
 let acctRepFilter  = 'All';
 let acctViewCharts = {};
+
+// ── Virtual scroll state ──────────────────────────────────────
+let vsRows       = [];   // current filtered+sorted row data
+let vsStart      = 0;    // index of first rendered row
+let vsRafPending = false;
+const VS_ROW_H   = 36;   // px per row
+const VS_BUFFER  = 20;   // extra rows above/below viewport
+const VS_PAGE    = 40;   // rows per render window
 let acctOverviewData = null; // cached rep-overview API response
 let acctFilters    = {};     // { colId → Set | string | {min,max} }
+let acctAdvisors   = null;  // [{displayName, rep_prefix}] — loaded after accounts fetch
 let acctFilterOpenId    = null;
 let acctFilterDebounce  = null;
 
@@ -36,6 +45,7 @@ const ACCT_COL_DEFS = {
   bsPct:          { id: 'bsPct',          label: 'Best Seller %',   sortKey: 'bsPct',          cls: 'num-ctr', tip: '<strong>Best Seller %</strong><br>Formula: Best Seller lines ÷ Total lines (YTD)<br>Items flagged in NCR with profCod1 = Y.' },
   daysSince:      { id: 'daysSince',      label: 'Days Since Order',sortKey: 'daysSince',      cls: 'num-ctr', tip: '<strong>Days Since Last Order</strong><br>Calendar days from the customer\'s most recent order date to today.' },
   lastOrder:      { id: 'lastOrder',      label: 'Last Order Date', sortKey: 'lastOrder',      cls: 'num-ctr', tip: '<strong>Last Order Date</strong><br>Date of the most recent ticket in NCR for this customer.' },
+  rep:            { id: 'rep',             label: 'Rep',             sortKey: 'rep',            cls: 'num-ctr', tip: '<strong>Sales Advisor</strong><br>The sales rep code assigned to this account in NCR.' },
   // Hidden by default — available via Column Chooser
   category:       { id: 'category',       label: 'Category',        sortKey: 'category',       cls: 'num-ctr', tip: '<strong>Category</strong><br>Customer type code from NCR (e.g. UNIV, HOTEL, HOSP, CASINO).' },
   termsCode:      { id: 'termsCode',      label: 'Terms',           sortKey: 'termsCode',      cls: 'num-ctr', tip: '<strong>Terms Code</strong><br>Payment terms assigned to this account (e.g. N30, COD).' },
@@ -73,17 +83,18 @@ const ACCT_DEFAULT_LAYOUT = {
     { id: 'bsPct',           visible: true,  order: 15 },
     { id: 'discount',        visible: true,  order: 16 },
     { id: 'email',           visible: true,  order: 17 },
+    { id: 'rep',             visible: true,  order: 18 },
     // Hidden by default
-    { id: 'priorYtd',        visible: false, order: 18 },
-    { id: 'priorMtd',        visible: false, order: 19 },
-    { id: 'pctToTarget',     visible: false, order: 20 },
-    { id: 'target',          visible: false, order: 21 },
-    { id: 'pctChange',       visible: false, order: 22 },
-    { id: 'termsCode',       visible: false, order: 23 },
-    { id: 'phone',           visible: false, order: 24 },
-    { id: 'monthRunRate',    visible: false, order: 25 },
-    { id: 'annualRunRate',   visible: false, order: 26 },
-    { id: 'pyFullYear',      visible: false, order: 27 },
+    { id: 'priorYtd',        visible: false, order: 19 },
+    { id: 'priorMtd',        visible: false, order: 20 },
+    { id: 'pctToTarget',     visible: false, order: 21 },
+    { id: 'target',          visible: false, order: 22 },
+    { id: 'pctChange',       visible: false, order: 23 },
+    { id: 'termsCode',       visible: false, order: 24 },
+    { id: 'phone',           visible: false, order: 25 },
+    { id: 'monthRunRate',    visible: false, order: 26 },
+    { id: 'annualRunRate',   visible: false, order: 27 },
+    { id: 'pyFullYear',      visible: false, order: 28 },
   ]
 };
 
@@ -185,6 +196,7 @@ function renderAcctTd(colId, a) {
     case 'phone':       return `<td class="num-ctr">${a.phone || '—'}</td>`;
     case 'discount':    return `<td class="num-ctr">${a.discount > 0 ? a.discount.toFixed(1) + '%' : '—'}</td>`;
     case 'monthGoal':   return `<td class="num-ctr">${a.monthGoal > 0 ? fmt$(a.monthGoal) : '—'}</td>`;
+    case 'rep':         return `<td class="num-ctr" style="font-size:12px;font-family:monospace">${a.salesRep || '—'}</td>`;
     case 'pyFullYear':  return `<td class="num-ctr">${a.pyFullYear > 0 ? fmt$(a.pyFullYear) : '—'}</td>`;
     default:            return '<td>—</td>';
   }
@@ -230,83 +242,123 @@ function renderAcctTotalsCell(colId, t) {
 
 // ── Column filter system ─────────────────────────────────────
 
+const ACCT_TEXT_OPS = [
+  { v: 'contains',     icon: '⊇',  label: 'Contains' },
+  { v: 'not_contains', icon: '⊉',  label: 'Does not contain' },
+  { v: 'begins',       icon: '|a', label: 'Begins with' },
+  { v: 'ends',         icon: 'z|', label: 'Ends with' },
+  { v: 'equals',       icon: '=',  label: 'Equals' },
+  { v: 'not_equals',   icon: '≠',  label: 'Does not equal' },
+];
+
 const ACCT_FILTER_TYPES = {
   name: 'text', custNo: 'text', lastOrder: 'text',
-  category: 'text', termsCode: 'text', email: 'text', phone: 'text',
+  termsCode: 'text', email: 'text', phone: 'text',
+  category: 'checklist', rep: 'checklist', discount: 'checklist',
   state: 'checklist', tier: 'checklist', monthTier: 'checklist',
-  ytdSales: 'range', mtdSales: 'range', target: 'range', pctToTarget: 'range',
-  priorYtd: 'range', priorMtd: 'range', priorMonth: 'range', pctToMonthGoal: 'range',
-  pctChange: 'range', bsPct: 'range', daysSince: 'range',
-  discount: 'range', monthGoal: 'range', annualGoal: 'range',
-  pctToMonthGoal: 'range', pctToAnnualGoal: 'range',
-  monthRunRate: 'range', annualRunRate: 'range', pyFullYear: 'range',
+  ytdSales: 'number', mtdSales: 'number', target: 'number', pctToTarget: 'number',
+  priorYtd: 'number', priorMtd: 'number', priorMonth: 'number', pctToMonthGoal: 'number',
+  pctChange: 'number', bsPct: 'number', daysSince: 'number',
+  monthGoal: 'number', annualGoal: 'number', pctToAnnualGoal: 'number',
+  monthRunRate: 'number', annualRunRate: 'number', pyFullYear: 'number',
 };
+
+const ACCT_NUM_OPS = [
+  { v: 'gte', icon: '≥', label: 'Greater than or equal' },
+  { v: 'lte', icon: '≤', label: 'Less than or equal' },
+  { v: 'gt',  icon: '>',  label: 'Greater than' },
+  { v: 'lt',  icon: '<',  label: 'Less than' },
+  { v: 'eq',  icon: '=',  label: 'Equals' },
+  { v: 'neq', icon: '≠',  label: 'Does not equal' },
+];
+
+// A sentinel Set stored when "Select None" is chosen — distinct from no-filter (undefined)
+const ACCT_FILTER_NONE = '__none__';
 
 function acctFilterActive(colId) {
   const f = acctFilters[colId];
-  if (!f) return false;
-  if (f instanceof Set) return f.size > 0;
+  if (f === undefined || f === null) return false;
+  if (f === ACCT_FILTER_NONE) return true;  // "show nothing" is an active filter
+  if (f instanceof Set) return true;         // any Set (even empty) = active
+  if (typeof f === 'object' && 'op' in f) return !!f.value;
   if (typeof f === 'object') return f.min != null || f.max != null;
   return !!f;
+}
+
+function _applyTextOp(fieldVal, filter) {
+  const fv = (filter.value || '').toLowerCase();
+  if (!fv) return true;
+  const rv = (fieldVal || '').toLowerCase();
+  switch (filter.op) {
+    case 'not_contains': return !rv.includes(fv);
+    case 'begins':       return rv.startsWith(fv);
+    case 'ends':         return rv.endsWith(fv);
+    case 'equals':       return rv === fv;
+    case 'not_equals':   return rv !== fv;
+    default:             return rv.includes(fv); // 'contains' and fallback
+  }
+}
+
+function _numCmp(rv, filter) {
+  const fv = parseFloat(filter.value);
+  if (isNaN(fv) || filter.value === '' || filter.value == null) return true;
+  switch (filter.op || 'gte') {
+    case 'eq':  return rv === fv;
+    case 'neq': return rv !== fv;
+    case 'gt':  return rv > fv;
+    case 'gte': return rv >= fv;
+    case 'lt':  return rv < fv;
+    case 'lte': return rv <= fv;
+    default:    return rv >= fv;
+  }
 }
 
 function applyAcctFilters(list) {
   return list.filter(a => {
     for (const [colId, filter] of Object.entries(acctFilters)) {
       if (!acctFilterActive(colId)) continue;
+      if (filter === ACCT_FILTER_NONE) return false;  // "select none" hides every row
       switch (colId) {
         case 'tier':      if (!filter.has(a.tier))            return false; break;
         case 'monthTier': if (!filter.has(a.monthTier||'Healthy')) return false; break;
         case 'state':     if (!filter.has(a.state || ''))     return false; break;
-        case 'name':      if (!(a.name       || '').toLowerCase().includes(filter.toLowerCase())) return false; break;
-        case 'custNo':    if (!(a.custNo     || '').toLowerCase().includes(filter.toLowerCase())) return false; break;
-        case 'category':  if (!(a.category   || '').toLowerCase().includes(filter.toLowerCase())) return false; break;
-        case 'termsCode': if (!(a.termsCode  || '').toLowerCase().includes(filter.toLowerCase())) return false; break;
-        case 'email':     if (!(a.email      || '').toLowerCase().includes(filter.toLowerCase())) return false; break;
-        case 'phone':     if (!(a.phone      || '').toLowerCase().includes(filter.toLowerCase())) return false; break;
-        case 'lastOrder': if (!(a.lastOrderDate || '').includes(filter)) return false; break;
-        case 'ytdSales':       if (filter.min != null && a.ytdSales < filter.min) return false;
-                               if (filter.max != null && a.ytdSales > filter.max) return false; break;
-        case 'mtdSales':       if (filter.min != null && (a.mtdSales||0) < filter.min) return false;
-                               if (filter.max != null && (a.mtdSales||0) > filter.max) return false; break;
-        case 'target':         if (filter.min != null && a.target < filter.min) return false;
-                               if (filter.max != null && a.target > filter.max) return false; break;
-        case 'pctToTarget':  { const v = a.pctToTarget * 100;
-                               if (filter.min != null && v < filter.min) return false;
-                               if (filter.max != null && v > filter.max) return false; break; }
-        case 'priorYtd':       if (filter.min != null && a.priorYtd < filter.min) return false;
-                               if (filter.max != null && a.priorYtd > filter.max) return false; break;
-        case 'priorMtd':       if (filter.min != null && (a.priorMtd||0) < filter.min) return false;
-                               if (filter.max != null && (a.priorMtd||0) > filter.max) return false; break;
-        case 'priorMonth':     if (filter.min != null && (a.priorMonth||0) < filter.min) return false;
-                               if (filter.max != null && (a.priorMonth||0) > filter.max) return false; break;
-        case 'pctToMonthGoal': { const v = (a.pctToMonthGoal||0) * 100;
-                               if (filter.min != null && v < filter.min) return false;
-                               if (filter.max != null && v > filter.max) return false; break; }
-        case 'pctChange':    { const v = a.priorYtd > 0 ? (a.ytdSales - a.priorYtd) / a.priorYtd * 100 : null;
-                               if (v === null) return false;
-                               if (filter.min != null && v < filter.min) return false;
-                               if (filter.max != null && v > filter.max) return false; break; }
-        case 'bsPct':        { const v = a.bsPct * 100;
-                               if (filter.min != null && v < filter.min) return false;
-                               if (filter.max != null && v > filter.max) return false; break; }
-        case 'daysSince':      if (filter.min != null && a.daysSinceOrder < filter.min) return false;
-                               if (filter.max != null && a.daysSinceOrder > filter.max) return false; break;
-        case 'monthGoal':      if (filter.min != null && (a.monthGoal||0) < filter.min) return false;
-                               if (filter.max != null && (a.monthGoal||0) > filter.max) return false; break;
-        case 'annualGoal':     if (filter.min != null && (a.annualGoal||0) < filter.min) return false;
-                               if (filter.max != null && (a.annualGoal||0) > filter.max) return false; break;
-        case 'pctToAnnualGoal':{ const v = (a.pctToAnnualGoal||0) * 100;
-                               if (filter.min != null && v < filter.min) return false;
-                               if (filter.max != null && v > filter.max) return false; break; }
-        case 'monthRunRate':   if (filter.min != null && (a.monthRunRate||0) < filter.min) return false;
-                               if (filter.max != null && (a.monthRunRate||0) > filter.max) return false; break;
-        case 'annualRunRate':  if (filter.min != null && (a.annualRunRate||0) < filter.min) return false;
-                               if (filter.max != null && (a.annualRunRate||0) > filter.max) return false; break;
-        case 'pyFullYear':     if (filter.min != null && (a.pyFullYear||0) < filter.min) return false;
-                               if (filter.max != null && (a.pyFullYear||0) > filter.max) return false; break;
-        case 'discount':       if (filter.min != null && (a.discount||0) < filter.min) return false;
-                               if (filter.max != null && (a.discount||0) > filter.max) return false; break;
+        case 'name':      if (!_applyTextOp(a.name,          typeof filter === 'string' ? { op: 'contains', value: filter } : filter)) return false; break;
+        case 'custNo':    if (!_applyTextOp(a.custNo,        typeof filter === 'string' ? { op: 'contains', value: filter } : filter)) return false; break;
+        case 'category':  if (filter instanceof Set) { if (!filter.has(a.category || '')) return false; } else if (!_applyTextOp(a.category, filter)) return false; break;
+        case 'rep': {
+          if (filter instanceof Set) {
+            // Each set value is a rep_prefix — match if salesRep equals prefix or starts with prefix-
+            const sr = a.salesRep || '';
+            const matched = [...filter].some(prefix => sr === prefix || sr.startsWith(prefix + '-'));
+            if (!matched) return false;
+          } else if (!_applyTextOp(a.salesRep, filter)) return false;
+          break;
+        }
+        case 'termsCode': if (!_applyTextOp(a.termsCode,    typeof filter === 'string' ? { op: 'contains', value: filter } : filter)) return false; break;
+        case 'email':     if (!_applyTextOp(a.email,        typeof filter === 'string' ? { op: 'contains', value: filter } : filter)) return false; break;
+        case 'phone':     if (!_applyTextOp(a.phone,        typeof filter === 'string' ? { op: 'contains', value: filter } : filter)) return false; break;
+        case 'lastOrder': if (!_applyTextOp(a.lastOrderDate,typeof filter === 'string' ? { op: 'contains', value: filter } : filter)) return false; break;
+        case 'ytdSales':        if (!_numCmp(a.ytdSales,           filter)) return false; break;
+        case 'mtdSales':        if (!_numCmp(a.mtdSales||0,        filter)) return false; break;
+        case 'target':          if (!_numCmp(a.target,             filter)) return false; break;
+        case 'pctToTarget':     if (!_numCmp(a.pctToTarget*100,    filter)) return false; break;
+        case 'priorYtd':        if (!_numCmp(a.priorYtd,           filter)) return false; break;
+        case 'priorMtd':        if (!_numCmp(a.priorMtd||0,        filter)) return false; break;
+        case 'priorMonth':      if (!_numCmp(a.priorMonth||0,      filter)) return false; break;
+        case 'pctToMonthGoal':  if (!_numCmp((a.pctToMonthGoal||0)*100, filter)) return false; break;
+        case 'pctChange': {
+          if (a.priorYtd <= 0) return false;
+          if (!_numCmp((a.ytdSales - a.priorYtd) / a.priorYtd * 100, filter)) return false; break;
+        }
+        case 'bsPct':           if (!_numCmp(a.bsPct*100,          filter)) return false; break;
+        case 'daysSince':       if (!_numCmp(a.daysSinceOrder,      filter)) return false; break;
+        case 'monthGoal':       if (!_numCmp(a.monthGoal||0,        filter)) return false; break;
+        case 'annualGoal':      if (!_numCmp(a.annualGoal||0,       filter)) return false; break;
+        case 'pctToAnnualGoal': if (!_numCmp((a.pctToAnnualGoal||0)*100, filter)) return false; break;
+        case 'monthRunRate':    if (!_numCmp(a.monthRunRate||0,     filter)) return false; break;
+        case 'annualRunRate':   if (!_numCmp(a.annualRunRate||0,    filter)) return false; break;
+        case 'pyFullYear':      if (!_numCmp(a.pyFullYear||0,       filter)) return false; break;
+        case 'discount':  if (filter instanceof Set) { if (!filter.has((a.discount||0).toFixed(1))) return false; } break;
       }
     }
     return true;
@@ -330,18 +382,17 @@ function _mountFilterPanel(colId, anchorRect) {
   panel.className = 'acct-col-filter-panel';
   panel.innerHTML = _buildFilterHTML(colId, type);
   document.body.appendChild(panel);
-  const pw   = 230;
+  const pw   = 290;
   panel.style.left = Math.min(anchorRect.left, window.innerWidth - pw - 8) + 'px';
   panel.style.top  = (anchorRect.bottom + 4) + 'px';
-  const inp = panel.querySelector('input:not([type=checkbox])');
+  const inp = panel.querySelector('.acf-text-inline') || panel.querySelector('input:not([type=checkbox])');
   if (inp) { inp.focus(); inp.select && inp.select(); }
 }
 
 function _onOutsideFilter(e) {
   const p = document.getElementById('acct-col-filter-panel');
   if (p && p.contains(e.target)) return;
-  // Also ignore clicks on the filter buttons themselves (they handle toggle)
-  if (e.target.closest('.col-filter-btn')) return;
+  if (e.target.closest('.col-filter-btn') || e.target.closest('.acft-chip-btn')) return;
   closeColFilter();
   document.removeEventListener('mousedown', _onOutsideFilter);
 }
@@ -354,6 +405,9 @@ function closeColFilter() {
 
 function reopenActiveFilter() {
   if (!acctFilterOpenId) return;
+  // Checklist panels anchor to the inline filter row chip
+  const chip = document.querySelector(`.acft-row td[data-col-id="${acctFilterOpenId}"] .acft-chip-btn`);
+  if (chip) { _mountFilterPanel(acctFilterOpenId, chip.getBoundingClientRect()); return; }
   const btn = document.querySelector(`th[data-col-id="${acctFilterOpenId}"] .col-filter-btn`);
   if (!btn) { acctFilterOpenId = null; return; }
   _mountFilterPanel(acctFilterOpenId, btn.getBoundingClientRect());
@@ -376,11 +430,46 @@ function _buildFilterHTML(colId, type) {
     } else if (colId === 'state') {
       const states = [...new Set((accountsData || []).map(a => a.state || '').filter(Boolean))].sort();
       options = states.map(s => ({ value: s, label: s }));
+    } else if (colId === 'category') {
+      const vals = [...new Set((accountsData || []).map(a => a.category || '').filter(Boolean))].sort();
+      options = vals.map(v => ({ value: v, label: v }));
+    } else if (colId === 'rep') {
+      // Collect all prefixes seen in the data (strip -ACT/-INA/-NEW suffix)
+      const rawCodes = [...new Set((accountsData || []).map(a => a.salesRep || '').filter(Boolean))];
+      const prefixSet = new Set(rawCodes.map(code => {
+        const dash = code.lastIndexOf('-');
+        return dash > 0 ? code.slice(0, dash) : code;
+      }));
+
+      if (acctAdvisors && acctAdvisors.length) {
+        // Named advisors first, then any leftover prefixes not covered by a user
+        const coveredPrefixes = new Set(acctAdvisors.map(a => a.rep_prefix));
+        const named = acctAdvisors
+          .filter(a => prefixSet.has(a.rep_prefix))
+          .map(a => ({ value: a.rep_prefix, label: a.displayName }));
+        const unnamed = [...prefixSet]
+          .filter(p => !coveredPrefixes.has(p))
+          .sort()
+          .map(p => ({ value: p, label: p }));
+        options = [...named, ...unnamed];
+      } else {
+        // Fallback: group by prefix, show prefix as label
+        options = [...prefixSet].sort().map(p => ({ value: p, label: p }));
+      }
+    } else if (colId === 'discount') {
+      const vals = [...new Set((accountsData || []).map(a => (a.discount || 0).toFixed(1)).filter(v => parseFloat(v) > 0))].sort((a, b) => parseFloat(a) - parseFloat(b));
+      options = vals.map(v => ({ value: v, label: v + '%' }));
     }
-    const currentSet = (acctFilters[colId] instanceof Set) ? acctFilters[colId] : new Set();
-    // Unchecked = filtered out; checked = included. If set is empty all are shown (no filter).
+
+    const rawFilter  = acctFilters[colId];
+    const noneActive = rawFilter === ACCT_FILTER_NONE;
+    const currentSet = (rawFilter instanceof Set) ? rawFilter : new Set();
+    const needsSearch = options.length > 7;
+    const searchBox = needsSearch
+      ? `<div style="padding:6px 10px 2px"><input class="acf-cl-search" type="text" placeholder="Search…" oninput="acfClSearch(this)"></div>`
+      : '';
     const rows = options.map(opt => {
-      const checked = currentSet.size === 0 || currentSet.has(opt.value);
+      const checked = !noneActive && (currentSet.size === 0 || currentSet.has(opt.value));
       const dot = opt.color
         ? `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${opt.color};flex-shrink:0"></span>`
         : '';
@@ -389,33 +478,52 @@ function _buildFilterHTML(colId, type) {
         ${dot}<span>${opt.label}</span>
       </label>`;
     }).join('');
-    const allChecked = currentSet.size === 0;
+    const allChecked = !noneActive && currentSet.size === 0;
     body = `
       <label class="acf-check-row acf-select-all">
         <input type="checkbox" ${allChecked ? 'checked' : ''} onchange="acctChecklistSelectAll('${colId}',this)">
         <span style="font-weight:600;color:#374151">Select All</span>
       </label>
       <div class="acf-sep"></div>
+      ${searchBox}
       <div class="acf-checklist">${rows}</div>`;
+
   } else if (type === 'text') {
-    const cur = typeof acctFilters[colId] === 'string' ? acctFilters[colId] : '';
-    body = `<input class="acf-text" type="text" placeholder="Search ${label}…" value="${cur.replace(/"/g,'&quot;')}"
-      oninput="acctTextChange('${colId}',this.value)"
-      onkeydown="if(event.key==='Enter'||event.key==='Escape')closeColFilter()">`;
+    const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && 'op' in acctFilters[colId])
+      ? acctFilters[colId] : { op: 'contains', value: '' };
+    const opDef = ACCT_TEXT_OPS.find(o => o.v === cur.op) || ACCT_TEXT_OPS[0];
+    const menuItems = ACCT_TEXT_OPS.map(o =>
+      `<div class="acf-op-item${cur.op === o.v ? ' acf-op-selected' : ''}" data-op="${o.v}" onclick="acfSelectOp('${colId}','${o.v}',event)">
+        <span class="acf-op-item-icon">${o.icon}</span>
+        <span>${o.label}</span>
+      </div>`).join('');
+    body = `
+      <div class="acf-op-row">
+        <button class="acf-op-icon-btn" title="${opDef.label}" onclick="acfToggleOpMenu('${colId}',event)">${opDef.icon}</button>
+        <input class="acf-text-inline" type="text" placeholder="Value…" value="${(cur.value || '').replace(/"/g,'&quot;')}"
+          oninput="acctFilterOpChange('${colId}','value',this.value)"
+          onkeydown="if(event.key==='Enter'||event.key==='Escape')closeColFilter()">
+      </div>
+      <div class="acf-op-menu" id="acf-opmenu-${colId}" style="display:none">${menuItems}</div>`;
+
   } else {
-    // range
-    const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && !(acctFilters[colId] instanceof Set))
-      ? acctFilters[colId] : {};
-    const isPercent = ['pctToTarget','pctToMonthGoal','pctToAnnualGoal','pctChange','bsPct','discount'].includes(colId);
-    const isDollar  = ['ytdSales','mtdSales','target','priorYtd','priorMtd','priorMonth','monthGoal','annualGoal','monthRunRate','annualRunRate','pyFullYear'].includes(colId);
-    const unit = isPercent ? '%' : colId === 'daysSince' ? 'days' : isDollar ? '$' : '';
-    body = `<div class="acf-range">
-      <input class="acf-range-inp" type="number" placeholder="Min${unit ? ' '+unit : ''}" value="${cur.min ?? ''}"
-        oninput="acctRangeChange('${colId}','min',this.value)">
-      <span class="acf-range-dash">—</span>
-      <input class="acf-range-inp" type="number" placeholder="Max${unit ? ' '+unit : ''}" value="${cur.max ?? ''}"
-        oninput="acctRangeChange('${colId}','max',this.value)">
-    </div>`;
+    // number — operator + single value
+    const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && 'op' in acctFilters[colId])
+      ? acctFilters[colId] : { op: 'gte', value: '' };
+    const opDef = ACCT_NUM_OPS.find(o => o.v === cur.op) || ACCT_NUM_OPS[0];
+    const menuItems = ACCT_NUM_OPS.map(o =>
+      `<div class="acf-op-item${cur.op === o.v ? ' acf-op-selected' : ''}" data-op="${o.v}" onclick="acfSelectNumOp('${colId}','${o.v}',event)">
+        <span class="acf-op-item-icon">${o.icon}</span>
+        <span>${o.label}</span>
+      </div>`).join('');
+    body = `
+      <div class="acf-op-row">
+        <button class="acf-op-icon-btn" title="${opDef.label}" onclick="acfToggleOpMenu('${colId}',event)">${opDef.icon}</button>
+        <input class="acf-text-inline" type="number" placeholder="Value…" value="${(cur.value || '').replace(/"/g,'&quot;')}"
+          oninput="acctNumChange('${colId}',this.value)"
+          onkeydown="if(event.key==='Enter'||event.key==='Escape')closeColFilter()">
+      </div>
+      <div class="acf-op-menu" id="acf-opmenu-${colId}" style="display:none">${menuItems}</div>`;
   }
 
   return `
@@ -431,57 +539,127 @@ function acctChecklistChange(colId, cb) {
   if (!panel) return;
   const boxes   = [...panel.querySelectorAll('.acf-checklist input[type=checkbox]')];
   const checked = boxes.filter(b => b.checked).map(b => b.value);
-  // Update "Select All" checkbox state
-  const allBox = panel.querySelector('.acf-select-all input');
+  const allBox  = panel.querySelector('.acf-select-all input');
   if (allBox) allBox.checked = checked.length === boxes.length;
 
-  if (checked.length === 0 || checked.length === boxes.length) delete acctFilters[colId];
-  else acctFilters[colId] = new Set(checked);
-  renderAccountsOverview();
-  setTimeout(reopenActiveFilter, 0);
+  if (checked.length === boxes.length) {
+    delete acctFilters[colId];
+  } else if (checked.length === 0) {
+    acctFilters[colId] = ACCT_FILTER_NONE;
+  } else {
+    acctFilters[colId] = new Set(checked);
+  }
+  acctQuickRefresh();
 }
 
 function acctChecklistSelectAll(colId, cb) {
   const panel = document.getElementById('acct-col-filter-panel');
   if (!panel) return;
   panel.querySelectorAll('.acf-checklist input[type=checkbox]').forEach(b => { b.checked = cb.checked; });
-  if (cb.checked) delete acctFilters[colId];
-  else acctFilters[colId] = new Set(); // empty set = show nothing
-  renderAccountsOverview();
-  setTimeout(reopenActiveFilter, 0);
+  if (cb.checked) {
+    delete acctFilters[colId];
+  } else {
+    acctFilters[colId] = ACCT_FILTER_NONE;
+  }
+  acctQuickRefresh();
 }
 
 function acctTextChange(colId, value) {
+  acctFilterOpChange(colId, 'value', value);
+}
+
+function acctFilterOpChange(colId, field, val) {
+  clearTimeout(acctFilterDebounce);
+  const delay = field === 'op' ? 0 : 280;
+  acctFilterDebounce = setTimeout(() => {
+    const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && 'op' in acctFilters[colId])
+      ? acctFilters[colId] : { op: 'contains', value: '' };
+    acctFilters[colId] = { ...cur, [field]: val };
+    acctQuickRefresh();
+  }, delay);
+}
+
+function acctNumChange(colId, val) {
   clearTimeout(acctFilterDebounce);
   acctFilterDebounce = setTimeout(() => {
-    const v = value.trim();
-    if (v) acctFilters[colId] = v; else delete acctFilters[colId];
-    renderAccountsOverview();
-    // Don't reopen — user is typing in the panel which persists until outside click
+    const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && 'op' in acctFilters[colId])
+      ? acctFilters[colId] : { op: 'gte', value: '' };
+    acctFilters[colId] = { ...cur, value: val };
+    acctQuickRefresh();
   }, 280);
 }
 
-function acctRangeChange(colId, side, value) {
-  clearTimeout(acctFilterDebounce);
-  acctFilterDebounce = setTimeout(() => {
-    if (!acctFilters[colId] || acctFilters[colId] instanceof Set) acctFilters[colId] = {};
-    const num = parseFloat(value);
-    if (!isNaN(num)) acctFilters[colId][side] = num;
-    else delete acctFilters[colId][side];
-    if (acctFilters[colId].min == null && acctFilters[colId].max == null) delete acctFilters[colId];
-    renderAccountsOverview();
-  }, 280);
+function acfSelectNumOp(colId, op, event) {
+  if (event) event.stopPropagation();
+  const panel = document.getElementById('acct-col-filter-panel');
+  const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && 'op' in acctFilters[colId])
+    ? acctFilters[colId] : { op: 'gte', value: '' };
+  acctFilters[colId] = { ...cur, op };
+  const opDef = ACCT_NUM_OPS.find(o => o.v === op);
+  if (panel && opDef) {
+    const btn = panel.querySelector('.acf-op-icon-btn');
+    if (btn) { btn.textContent = opDef.icon; btn.title = opDef.label; }
+    panel.querySelectorAll('.acf-op-item').forEach(el => el.classList.toggle('acf-op-selected', el.dataset.op === op));
+  }
+  const menu = document.getElementById('acf-opmenu-' + colId);
+  if (menu) menu.style.display = 'none';
+  if (acctFilters[colId].value && String(acctFilters[colId].value).trim()) acctQuickRefresh();
 }
+
+function acfToggleOpMenu(colId, event) {
+  event.stopPropagation();
+  const menu = document.getElementById('acf-opmenu-' + colId);
+  if (!menu) return;
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+
+function acfSelectOp(colId, op, event) {
+  if (event) event.stopPropagation();
+  const panel = document.getElementById('acct-col-filter-panel');
+  // Update state
+  const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && 'op' in acctFilters[colId])
+    ? acctFilters[colId] : { op: 'contains', value: '' };
+  acctFilters[colId] = { ...cur, op };
+  // Update icon button in place
+  const opDef = ACCT_TEXT_OPS.find(o => o.v === op);
+  if (panel && opDef) {
+    const btn = panel.querySelector('.acf-op-icon-btn');
+    if (btn) { btn.textContent = opDef.icon; btn.title = opDef.label; }
+  }
+  // Update selected highlight in menu
+  if (panel) {
+    panel.querySelectorAll('.acf-op-item').forEach(el => {
+      el.classList.toggle('acf-op-selected', el.dataset.op === op);
+    });
+  }
+  // Close the menu
+  const menu = document.getElementById('acf-opmenu-' + colId);
+  if (menu) menu.style.display = 'none';
+  if (acctFilters[colId].value && acctFilters[colId].value.trim()) acctQuickRefresh();
+}
+
+function acfClSearch(inp) {
+  const q = inp.value.toLowerCase();
+  inp.closest('.acct-col-filter-panel').querySelectorAll('.acf-checklist .acf-check-row').forEach(row => {
+    const txt = (row.querySelector('span:last-child') || {}).textContent || '';
+    row.style.display = txt.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
 
 function clearColFilter(colId) {
   delete acctFilters[colId];
   closeColFilter();
-  renderAccountsOverview();
+  // Clear inline input for this column
+  const inp = document.querySelector(`.acft-row td[data-col-id="${colId}"] .acft-input`);
+  if (inp) inp.value = '';
+  acctQuickRefresh();
 }
 
 function clearAllAcctFilters() {
   acctFilters = {};
-  renderAccountsOverview();
+  document.querySelectorAll('.acft-row .acft-input').forEach(inp => { inp.value = ''; });
+  acctQuickRefresh();
 }
 
 // ── Context menu ──────────────────────────────────────────────
@@ -738,7 +916,7 @@ function syncAcctTotalsBar() {
 // ── Header drag-to-reorder ────────────────────────────────────
 
 function bindAcctHeaderDrag() {
-  const thead = document.querySelector('.acct-grid-wrap thead tr');
+  const thead = document.querySelector('.acct-grid-wrap thead tr:first-child');
   if (!thead) return;
 
   let indicator = document.getElementById('acct-col-drop-indicator');
@@ -799,19 +977,59 @@ function bindAcctHeaderDrag() {
     thead.querySelectorAll('th').forEach(th => th.classList.remove('col-th-dragging'));
     dragId = null; dropTarget = null;
     if (!fromId || !toId || fromId === toId) return;
-    const sorted   = [...acctLayout.columns].sort((a, b) => a.order - b.order);
-    const fromIdx  = sorted.findIndex(c => c.id === fromId);
-    const toIdx    = sorted.findIndex(c => c.id === toId);
+
+    // Update logical order
+    const sorted  = [...acctLayout.columns].sort((a, b) => a.order - b.order);
+    const fromIdx = sorted.findIndex(c => c.id === fromId);
+    const toIdx   = sorted.findIndex(c => c.id === toId);
     if (fromIdx < 0 || toIdx < 0) return;
-    const [moved]  = sorted.splice(fromIdx, 1);
+    const [moved] = sorted.splice(fromIdx, 1);
     const insertAt = dropAfter
       ? (fromIdx < toIdx ? toIdx : toIdx + 1)
       : (fromIdx < toIdx ? toIdx - 1 : toIdx);
     sorted.splice(Math.max(0, Math.min(insertAt, sorted.length)), 0, moved);
     sorted.forEach((c, i) => { c.order = i; });
     acctLayout.columns = sorted;
-    renderAccountsOverview();
-    setTimeout(bindAcctHeaderDrag, 0);
+
+    // Reorder thead cells in-place — tbody is rebuilt by acctQuickRefresh
+    const theadEl = document.querySelector('.acct-grid-wrap thead');
+    if (!theadEl) { renderAccountsOverview(); setTimeout(bindAcctHeaderDrag, 0); return; }
+
+    const newOrder = sorted.filter(c => c.visible).map(c => c.id);
+
+    // Snapshot widths AND height from th elements before any DOM move
+    const headerRow = theadEl.querySelector('tr:first-child');
+    const widthMap = {};
+    let thHeight = null;
+    if (headerRow) {
+      headerRow.querySelectorAll('th[data-col-id]').forEach(th => {
+        const rect = th.getBoundingClientRect();
+        widthMap[th.dataset.colId] = rect.width + 'px';
+        if (!thHeight) thHeight = rect.height + 'px';
+      });
+    }
+
+    // Rebuild tbody FIRST so the table never has an empty tbody while thead reflows
+    acctQuickRefresh();
+
+    // Now reorder thead rows — tbody is already populated, no height explosion
+    theadEl.querySelectorAll('tr').forEach(row => {
+      const cellMap = {};
+      row.querySelectorAll('[data-col-id]').forEach(cell => {
+        cellMap[cell.dataset.colId] = cell;
+      });
+      if (!Object.keys(cellMap).length) return;
+      newOrder.forEach(id => { if (cellMap[id]) row.appendChild(cellMap[id]); });
+    });
+
+    // Restore th widths and lock height so layout engine can't expand them
+    if (headerRow) {
+      headerRow.querySelectorAll('th[data-col-id]').forEach(th => {
+        const w = widthMap[th.dataset.colId];
+        if (w) { th.style.width = w; th.style.minWidth = w; }
+        if (thHeight) th.style.height = thHeight;
+      });
+    }
   });
 }
 
@@ -926,9 +1144,20 @@ const HEALTH_COLORS = {
   });
 
   document.addEventListener('mouseout', e => {
-    if (!e.target.closest('[data-hs]')) return;
-    tip.classList.remove('hs-tip-visible');
+    const badge = e.target.closest('[data-hs]');
+    if (!badge) return;
+    // Only hide if the cursor is leaving the badge entirely (not moving to a child)
+    if (!badge.contains(e.relatedTarget)) {
+      tip.classList.remove('hs-tip-visible');
+    }
   });
+
+  // Safety net: hide if cursor leaves the window or lands on a non-badge element
+  document.addEventListener('mouseover', e => {
+    if (!e.target.closest('[data-hs]')) {
+      tip.classList.remove('hs-tip-visible');
+    }
+  }, true);
 })();
 
 const acctTooltipDefaults = {
@@ -1074,7 +1303,7 @@ function renderOverviewKpis() {
               '<strong>Month Run Rate:</strong> business days elapsed ÷ total business days in the month<br><strong>Business day:</strong> Mon–Fri excluding US federal holidays')}
             ${pill('Monthly Goal', fmt$(totalMonthGoal), `prior mo × ${monthlyGrowthPct}`, '', MONTHLY_GOAL_TOOLTIP)}
             ${pill('Daily Needed', dailyNeeded > 0 ? fmt$(dailyNeeded) : '—', 'to close gap')}
-            ${pill('Active Accounts', `${activeAccounts} <span style="opacity:0.55;font-size:14px;font-weight:500">/ ${totalAccounts}</span>`, `${activeAccPct}% ordered this month`, '', '<strong>Active account:</strong> at least one order in the last 180 days<br><strong>Sub-text:</strong> % of total accounts with an order so far this month')}
+            ${pill('Active Accounts', `${activeAccounts} <span style="opacity:0.55;font-size:14px;font-weight:500">/ ${totalAccounts}</span>`, 'Last 6 months', '', '<strong>Active account:</strong> at least one order in the last 180 days')}
           </div>
 
           <!-- Row 2: % to Annual Target | YTD Sales | % to Monthly Target | MTD Sales | Avg Order | Best Sellers on PO -->
@@ -1177,33 +1406,68 @@ function destroyStoreCharts() {
   acctViewCharts = {};
 }
 
-// ── Overview ──────────────────────────────────────────────────
+// ── Virtual scroll renderer ───────────────────────────────────
 
-function renderAccountsOverview() {
-  destroyStoreCharts();
+function renderVsRows() {
+  const hScroll = document.querySelector('.acct-h-scroll');
+  const tbody   = hScroll && hScroll.querySelector('tbody');
+  if (!tbody || !vsRows.length) {
+    if (tbody) {
+      const visCols = acctVisibleCols();
+      const colCount = visCols.length;
+      tbody.innerHTML = `<tr><td colspan="${colCount}" style="padding:20px;color:#9ca3af;text-align:center">No accounts found.</td></tr>`;
+    }
+    return;
+  }
 
-  const byRep = accountsData || [];
+  // Vertical scroll is on the window (acct-h-scroll uses overflow-y:clip)
+  const scrollTop  = window.scrollY || document.documentElement.scrollTop;
+  const viewH      = window.innerHeight;
+  const totalRows  = vsRows.length;
+  const totalH     = totalRows * VS_ROW_H;
 
-  // KPIs
-  const total        = byRep.length;
-  const totalYtd     = byRep.reduce((s, a) => s + a.ytdSales,   0);
-  const behindTarget = byRep.filter(a => a.ytdSales < a.target && a.target > 0).length;
-  const noOrders30   = byRep.filter(a => a.daysSinceOrder >= 30).length;
-  const growing      = byRep.filter(a => a.ytdSales > a.priorYtd && a.priorYtd > 0).length;
-  const declining    = byRep.filter(a => a.ytdSales < a.priorYtd && a.priorYtd > 0).length;
+  const firstVis   = Math.floor(scrollTop / VS_ROW_H);
+  const start      = Math.max(0, firstVis - VS_BUFFER);
+  const end        = Math.min(totalRows, firstVis + Math.ceil(viewH / VS_ROW_H) + VS_BUFFER);
 
-  const tierCounts = { All: byRep.length, Healthy: 0, Attention: 0, AtRisk: 0, Critical: 0 };
-  byRep.forEach(a => tierCounts[a.tier] = (tierCounts[a.tier] || 0) + 1);
+  vsStart = start;
 
-  // Apply tier filter, column filters, then sort
-  let list = acctTierFilter === 'All' ? byRep : byRep.filter(a => a.tier === acctTierFilter);
-  list = applyAcctFilters(list);
-  list = [...list].sort((a, b) => {
+  const topH    = start * VS_ROW_H;
+  const botH    = Math.max(0, totalH - end * VS_ROW_H);
+
+  const visCols = acctVisibleCols();
+  const colCount = visCols.length;
+
+  let html = `<tr class="vs-spacer-top"><td colspan="${colCount}" style="height:${topH}px;padding:0;border:0"></td></tr>`;
+  for (let i = start; i < end; i++) {
+    const a     = vsRows[i];
+    const rowBg = a.tier === 'Critical' ? 'background:#fff5f5' : a.tier === 'AtRisk' ? 'background:#fff8f0' : '';
+    html += `<tr style="${rowBg}">${visCols.map(c => renderAcctTd(c.id, a)).join('')}</tr>`;
+  }
+  html += `<tr class="vs-spacer-bot"><td colspan="${colCount}" style="height:${botH}px;padding:0;border:0"></td></tr>`;
+
+  tbody.innerHTML = html;
+}
+
+function _vsOnScroll() {
+  if (vsRafPending) return;
+  vsRafPending = true;
+  requestAnimationFrame(() => {
+    vsRafPending = false;
+    renderVsRows();
+  });
+}
+
+// ── Sort helper ───────────────────────────────────────────────
+
+function acctSortList(list) {
+  return [...list].sort((a, b) => {
     const dir = acctSortDir === 'asc' ? 1 : -1;
     const pctChange = x => x.priorYtd > 0 ? (x.ytdSales - x.priorYtd) / x.priorYtd : -1;
     switch (acctSortCol) {
       case 'name':        return dir * (a.name || '').localeCompare(b.name || '');
       case 'custNo':      return dir * (a.custNo || '').localeCompare(b.custNo || '');
+      case 'rep':         return dir * (a.salesRep || '').localeCompare(b.salesRep || '');
       case 'state':       return dir * (a.state || '').localeCompare(b.state || '');
       case 'tier':           return dir * (a.tier || '').localeCompare(b.tier || '');
       case 'monthTier':      return dir * (a.monthTier || '').localeCompare(b.monthTier || '');
@@ -1233,66 +1497,263 @@ function renderAccountsOverview() {
       default:            return dir * (a.ytdSales - b.ytdSales);
     }
   });
+}
+
+function _computeTotals(list) {
+  const activeFilterCount = Object.keys(acctFilters).filter(k => acctFilterActive(k)).length;
+  const totLabel = (acctTierFilter === 'All' ? `All ${list.length} accounts` : `${acctTierFilter.replace('AtRisk','At Risk')} (${list.length})`) +
+                   (activeFilterCount > 0 ? ` · ${activeFilterCount} filter${activeFilterCount > 1 ? 's' : ''}` : '');
+  return {
+    label:         totLabel,
+    ytd:           list.reduce((s, a) => s + a.ytdSales, 0),
+    mtd:           list.reduce((s, a) => s + (a.mtdSales || 0), 0),
+    target:        list.reduce((s, a) => s + (a.target || 0), 0),
+    priorYtd:      list.reduce((s, a) => s + (a.priorYtd || 0), 0),
+    priorMtd:      list.reduce((s, a) => s + (a.priorMtd   || 0), 0),
+    priorMonth:    list.reduce((s, a) => s + (a.priorMonth || 0), 0),
+    bsUnits:       list.reduce((s, a) => s + (a.bsUnits || 0), 0),
+    allUnits:      list.reduce((s, a) => s + (a.totalUnits || 0), 0),
+    monthGoal:     list.reduce((s, a) => s + (a.monthGoal    || 0), 0),
+    annualGoal:    list.reduce((s, a) => s + (a.annualGoal   || 0), 0),
+    monthRunRate:  list.reduce((s, a) => s + (a.monthRunRate  || 0), 0),
+    annualRunRate: list.reduce((s, a) => s + (a.annualRunRate || 0), 0),
+    pyFullYear:    list.reduce((s, a) => s + (a.pyFullYear   || 0), 0),
+    activeFilterCount,
+  };
+}
+
+function _updateTotalsBar(list) {
+  const visCols = acctVisibleCols();
+  const totData = _computeTotals(list);
+  const totalsRowHtml = visCols.map(c => renderAcctTotalsCell(c.id, totData)).join('');
+  const totBar = document.getElementById('acct-totals-bar');
+  if (totBar) {
+    totBar.innerHTML = `<table class="data-table acct-totals-table"><tbody><tr class="acct-totals-row">${totalsRowHtml}</tr></tbody></table>`;
+    syncAcctTotalsBar();
+  }
+}
+
+function _updateFilterControls(list) {
+  const totData = _computeTotals(list);
+  const activeFilterCount = totData.activeFilterCount;
+  const bar = document.querySelector('.tier-filter-bar');
+  if (!bar) return;
+  let clearBtn = bar.querySelector('.acct-clear-filters-btn');
+  if (activeFilterCount > 0) {
+    const txt = `✕ Clear ${activeFilterCount} filter${activeFilterCount > 1 ? 's' : ''}`;
+    if (!clearBtn) {
+      const btn = document.createElement('button');
+      btn.className = 'acct-clear-filters-btn';
+      btn.onclick = () => clearAllAcctFilters();
+      // Insert before the chooser button
+      const chooserBtn = bar.querySelector('.acct-layout-chooser-btn');
+      bar.insertBefore(btn, chooserBtn || null);
+      clearBtn = btn;
+    }
+    clearBtn.textContent = txt;
+  } else if (clearBtn) {
+    clearBtn.remove();
+  }
+}
+
+function _updateFilterRowChips() {
+  const row = document.querySelector('.acft-row');
+  if (!row) return;
+  row.querySelectorAll('td[data-col-id]').forEach(td => {
+    const colId = td.dataset.colId;
+    const chip = td.querySelector('.acft-chip-btn');
+    if (!chip) {
+      // update active class on text/number cells
+      const active = acctFilterActive(colId);
+      td.classList.toggle('acft-cell-active', active);
+      return;
+    }
+    const filter = acctFilters[colId];
+    const active = acctFilterActive(colId);
+    let chipLabel = 'All';
+    if (filter === ACCT_FILTER_NONE) chipLabel = 'None';
+    else if (filter instanceof Set) chipLabel = `${filter.size} sel.`;
+    chip.textContent = chipLabel + ' ▾';
+    chip.classList.toggle('acft-chip-active', active);
+    td.classList.toggle('acft-cell-active', active);
+  });
+}
+
+// ── Lightweight refresh — updates data without rebuilding thead ─
+
+function acctQuickRefresh() {
+  const byRep = accountsData || [];
+  let list = acctTierFilter === 'All' ? byRep : byRep.filter(a => a.tier === acctTierFilter);
+  list = applyAcctFilters(list);
+  list = acctSortList(list);
+  vsRows = list;
+  renderVsRows();
+  _updateTotalsBar(list);
+  _updateFilterControls(list);
+  _updateFilterRowChips();
+}
+
+// ── Inline filter row ─────────────────────────────────────────
+
+function _buildInlineFilterRow(visCols) {
+  const cells = visCols.map(col => {
+    const type = ACCT_FILTER_TYPES[col.id];
+    if (!type) return `<td class="acft-cell acft-cell-empty" data-col-id="${col.id}"></td>`;
+
+    const filter = acctFilters[col.id];
+    const active = acctFilterActive(col.id);
+
+    if (type === 'checklist') {
+      let chipLabel = 'All';
+      if (filter === ACCT_FILTER_NONE) chipLabel = 'None';
+      else if (filter instanceof Set) chipLabel = `${filter.size} sel.`;
+      const chipCls = 'acft-chip-btn' + (active ? ' acft-chip-active' : '');
+      return `<td class="acft-cell${active ? ' acft-cell-active' : ''}" data-col-id="${col.id}">
+        <div class="acft-inner">
+          <button class="${chipCls}" onclick="acftShowChecklist('${col.id}',this,event)">${chipLabel} ▾</button>
+        </div>
+      </td>`;
+    } else {
+      const ops = type === 'number' ? ACCT_NUM_OPS : ACCT_TEXT_OPS;
+      const defaultOp = type === 'number' ? 'gte' : 'contains';
+      const cur = (filter && typeof filter === 'object' && 'op' in filter) ? filter : { op: defaultOp, value: '' };
+      const opDef = ops.find(o => o.v === cur.op) || ops[0];
+      return `<td class="acft-cell${active ? ' acft-cell-active' : ''}" data-col-id="${col.id}">
+        <div class="acft-inner">
+          <button class="acft-op-btn" data-col-id="${col.id}" data-ftype="${type}" title="${opDef.label}"
+            onclick="acftShowOpMenu('${col.id}','${type}',this,event)">${opDef.icon}</button>
+          <input class="acft-input" type="${type === 'number' ? 'number' : 'text'}" placeholder="…"
+            value="${(cur.value||'').replace(/"/g,'&quot;')}"
+            oninput="acftInputChange('${col.id}','${type}',this.value)"
+            onkeydown="if(event.key==='Escape'){this.value='';acftInputChange('${col.id}','${type}','')}">
+        </div>
+      </td>`;
+    }
+  }).join('');
+  return `<tr class="acft-row">${cells}</tr>`;
+}
+
+function acftShowChecklist(colId, btn, event) {
+  event.stopPropagation();
+  if (acctFilterOpenId === colId) { closeColFilter(); return; }
+  closeColFilter();
+  acctFilterOpenId = colId;
+  _mountFilterPanel(colId, btn.getBoundingClientRect());
+  setTimeout(() => document.addEventListener('mousedown', _onOutsideFilter), 0);
+}
+
+function acftInputChange(colId, type, val) {
+  clearTimeout(acctFilterDebounce);
+  acctFilterDebounce = setTimeout(() => {
+    const defaultOp = type === 'number' ? 'gte' : 'contains';
+    const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && 'op' in acctFilters[colId])
+      ? acctFilters[colId] : { op: defaultOp, value: '' };
+    acctFilters[colId] = { ...cur, value: val };
+    // Update cell active class in-place
+    const td = document.querySelector(`.acft-row td[data-col-id="${colId}"]`);
+    if (td) td.classList.toggle('acft-cell-active', !!(val && String(val).trim()));
+    acctQuickRefresh();
+  }, 250);
+}
+
+function acftShowOpMenu(colId, type, btn, event) {
+  event.stopPropagation();
+  document.querySelectorAll('.acft-op-menu-popup').forEach(m => m.remove());
+
+  const ops = type === 'number' ? ACCT_NUM_OPS : ACCT_TEXT_OPS;
+  const defaultOp = type === 'number' ? 'gte' : 'contains';
+  const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && 'op' in acctFilters[colId])
+    ? acctFilters[colId] : { op: defaultOp, value: '' };
+
+  const menu = document.createElement('div');
+  menu.className = 'acft-op-menu-popup';
+  menu.innerHTML = ops.map(o =>
+    `<div class="acft-op-item${cur.op === o.v ? ' acft-op-selected' : ''}" onclick="acftSelectOp('${colId}','${type}','${o.v}',event)">
+      <span class="acft-op-item-icon">${o.icon}</span>
+      <span>${o.label}</span>
+    </div>`).join('');
+  document.body.appendChild(menu);
+  const rect = btn.getBoundingClientRect();
+  const mw = 200;
+  menu.style.left = Math.min(rect.left, window.innerWidth - mw - 8) + 'px';
+  menu.style.top  = (rect.bottom + 2) + 'px';
+  setTimeout(() => document.addEventListener('click', () => menu.remove(), { once: true }), 0);
+}
+
+function acftSelectOp(colId, type, op, event) {
+  if (event) event.stopPropagation();
+  document.querySelectorAll('.acft-op-menu-popup').forEach(m => m.remove());
+  const ops = type === 'number' ? ACCT_NUM_OPS : ACCT_TEXT_OPS;
+  const defaultOp = type === 'number' ? 'gte' : 'contains';
+  const cur = (acctFilters[colId] && typeof acctFilters[colId] === 'object' && 'op' in acctFilters[colId])
+    ? acctFilters[colId] : { op: defaultOp, value: '' };
+  acctFilters[colId] = { ...cur, op };
+  // Update operator button icon in-place
+  const opDef = ops.find(o => o.v === op);
+  const opBtn = document.querySelector(`.acft-row td[data-col-id="${colId}"] .acft-op-btn`);
+  if (opBtn && opDef) { opBtn.textContent = opDef.icon; opBtn.title = opDef.label; }
+  if (cur.value && String(cur.value).trim()) acctQuickRefresh();
+}
+
+// ── Overview ──────────────────────────────────────────────────
+
+function renderAccountsOverview() {
+  destroyStoreCharts();
+
+  const byRep = accountsData || [];
+
+  // KPIs
+  const total        = byRep.length;
+  const totalYtd     = byRep.reduce((s, a) => s + a.ytdSales,   0);
+  const behindTarget = byRep.filter(a => a.ytdSales < a.target && a.target > 0).length;
+  const noOrders30   = byRep.filter(a => a.daysSinceOrder >= 30).length;
+  const growing      = byRep.filter(a => a.ytdSales > a.priorYtd && a.priorYtd > 0).length;
+  const declining    = byRep.filter(a => a.ytdSales < a.priorYtd && a.priorYtd > 0).length;
+
+  const tierCounts = { All: byRep.length, Healthy: 0, Attention: 0, AtRisk: 0, Critical: 0 };
+  byRep.forEach(a => tierCounts[a.tier] = (tierCounts[a.tier] || 0) + 1);
+
+  // Apply tier filter, column filters, then sort
+  let list = acctTierFilter === 'All' ? byRep : byRep.filter(a => a.tier === acctTierFilter);
+  list = applyAcctFilters(list);
+  list = acctSortList(list);
 
   // ── Tier filter buttons ───────────────────────────────────────
   const tierBtn = tier => {
     const active = acctTierFilter === tier;
     const count  = tierCounts[tier] || 0;
     const label  = tier === 'All' ? `All (${count})` : `${tier.replace('AtRisk', 'At Risk')} (${count})`;
-    return `<button class="tier-filter-btn${active ? ' active' : ''}" onclick="setAcctTierFilter('${tier}')">${label}</button>`;
+    return `<button class="tier-filter-btn${active ? ' active' : ''}" data-tier="${tier}" onclick="setAcctTierFilter('${tier}')">${label}</button>`;
   };
 
   // ── Table — dynamic column layout ───────────────────────────
   const visCols = acctVisibleCols();
   const colCount = visCols.length;
 
-  const thead = visCols.map(col => {
-    const active      = acctSortCol === col.sortKey;
-    const sortIcon    = active ? `<span class="sort-icon">${acctSortDir === 'asc' ? '▲' : '▼'}</span>` : '';
-    const cls         = [col.cls || '', 'sort-th', active ? 'sort-active' : ''].filter(Boolean).join(' ');
-    const tipHtml     = col.tip
+  const theadRow = visCols.map(col => {
+    const active   = acctSortCol === col.sortKey;
+    const sortIcon = active ? `<span class="sort-icon">${acctSortDir === 'asc' ? '▲' : '▼'}</span>` : '';
+    const cls      = [col.cls || '', 'sort-th', active ? 'sort-active' : ''].filter(Boolean).join(' ');
+    const tipHtml  = col.tip
       ? `<span class="kpi-info-wrap col-tip-wrap"><span class="kpi-info-icon">i<span class="kpi-tooltip-box col-tip-box">${col.tip}</span></span></span>`
-      : '';
-    const filterOn    = acctFilterActive(col.id);
-    const filterBtnCls = 'col-filter-btn' + (filterOn ? ' col-filter-active' : '');
-    const hasFilter   = ACCT_FILTER_TYPES[col.id];
-    const filterBtn   = hasFilter
-      ? `<button class="${filterBtnCls}" title="Filter" onclick="showColFilter('${col.id}',event)">▾</button>`
       : '';
     return `<th class="${cls}" data-col-id="${col.id}" onclick="acctSortBy('${col.sortKey}')" oncontextmenu="showAcctColMenu(event)">
       <div class="th-inner">
         <span class="col-drag-handle" draggable="true" data-col-id="${col.id}" title="Drag to reorder" onclick="event.stopPropagation()">⠿</span>
         <span class="th-label">${col.label}</span>
-        <span class="th-tail">${tipHtml}${filterBtn}${sortIcon}</span>
+        <span class="th-tail">${tipHtml}${sortIcon}</span>
       </div>
     </th>`;
   }).join('');
+  const thead = theadRow + _buildInlineFilterRow(visCols);
 
   // ── Totals row ───────────────────────────────────────────────
-  const totYtd       = list.reduce((s, a) => s + a.ytdSales, 0);
-  const totMtd       = list.reduce((s, a) => s + (a.mtdSales || 0), 0);
-  const totTarget    = list.reduce((s, a) => s + (a.target || 0), 0);
-  const totPriorYtd  = list.reduce((s, a) => s + (a.priorYtd || 0), 0);
-  const totPriorMtd  = list.reduce((s, a) => s + (a.priorMtd   || 0), 0);
-  const totPriorMonth= list.reduce((s, a) => s + (a.priorMonth || 0), 0);
-  const totBsUnits   = list.reduce((s, a) => s + (a.bsUnits || 0), 0);
-  const totAllUnits  = list.reduce((s, a) => s + (a.totalUnits || 0), 0);
-  const totMonthGoal    = list.reduce((s, a) => s + (a.monthGoal    || 0), 0);
-  const totAnnualGoal   = list.reduce((s, a) => s + (a.annualGoal   || 0), 0);
-  const totMonthRunRate = list.reduce((s, a) => s + (a.monthRunRate  || 0), 0);
-  const totAnnualRunRate= list.reduce((s, a) => s + (a.annualRunRate || 0), 0);
-  const totPyFull       = list.reduce((s, a) => s + (a.pyFullYear   || 0), 0);
-  const activeFilterCount = Object.keys(acctFilters).filter(k => acctFilterActive(k)).length;
-  const totLabel     = (acctTierFilter === 'All' ? `All ${list.length} accounts` : `${acctTierFilter.replace('AtRisk','At Risk')} (${list.length})`) +
-                       (activeFilterCount > 0 ? ` · ${activeFilterCount} filter${activeFilterCount > 1 ? 's' : ''}` : '');
-  const totData      = { label: totLabel, ytd: totYtd, mtd: totMtd, target: totTarget, priorYtd: totPriorYtd, priorMtd: totPriorMtd, priorMonth: totPriorMonth, bsUnits: totBsUnits, allUnits: totAllUnits, monthGoal: totMonthGoal, annualGoal: totAnnualGoal, monthRunRate: totMonthRunRate, annualRunRate: totAnnualRunRate, pyFullYear: totPyFull };
-
+  const totData       = _computeTotals(list);
+  const activeFilterCount = totData.activeFilterCount;
   const totalsRowHtml = visCols.map(c => renderAcctTotalsCell(c.id, totData)).join('');
 
-  const tbody = list.map(a => {
-    const rowBg = a.tier === 'Critical' ? 'background:#fff5f5' : a.tier === 'AtRisk' ? 'background:#fff8f0' : '';
-    return `<tr style="${rowBg}">${visCols.map(c => renderAcctTd(c.id, a)).join('')}</tr>`;
-  }).join('') || `<tr><td colspan="${colCount}" style="padding:20px;color:#9ca3af;text-align:center">No accounts found.</td></tr>`;
+  // Store sorted/filtered list for virtual scroll
+  vsRows = list;
 
   document.getElementById('store-view-content').innerHTML = `
     <div id="acct-overview-kpis">
@@ -1328,8 +1789,8 @@ function renderAccountsOverview() {
     <div class="inv-wrap acct-grid-wrap">
       <div class="acct-h-scroll">
         <table class="data-table">
-          <thead><tr>${thead}</tr></thead>
-          <tbody>${tbody}</tbody>
+          <thead class="acct-thead-sticky">${thead}</thead>
+          <tbody></tbody>
         </table>
       </div>
     </div>`;
@@ -1348,12 +1809,21 @@ function renderAccountsOverview() {
     renderAccountsCharts(list, byRep);
     bindAcctHeaderDrag();
     reopenActiveFilter();
+
+    // Initial virtual scroll render
+    renderVsRows();
+
     syncAcctTotalsBar();
     // Sync totals bar on horizontal scroll within the table's h-scroll container
     const hScroll = document.querySelector('.acct-h-scroll');
-    if (hScroll && !hScroll._acctTotalsScrollBound) {
-      hScroll.addEventListener('scroll', syncAcctTotalsBar);
-      hScroll._acctTotalsScrollBound = true;
+    if (hScroll) {
+      if (!hScroll._acctTotalsScrollBound) {
+        hScroll.addEventListener('scroll', syncAcctTotalsBar);
+        hScroll._acctTotalsScrollBound = true;
+      }
+      // Attach virtual scroll listener (only once; replace when re-rendered)
+      window.removeEventListener('scroll', _vsOnScroll);
+      window.addEventListener('scroll', _vsOnScroll);
     }
     if (!window._acctTotalsResizeBound) {
       window.addEventListener('resize', syncAcctTotalsBar);
@@ -1470,13 +1940,33 @@ function acctSortBy(col) {
     acctSortCol = col;
     acctSortDir = (col === 'name' || col === 'state' || col === 'tier' || col === 'lastOrder') ? 'asc' : 'desc';
   }
-  renderAccountsOverview();
+  // Update sort icons in-place to avoid destroying the filter row
+  document.querySelectorAll('.acct-grid-wrap thead tr:first-child th').forEach(th => {
+    const isActive = th.dataset.colId === col;
+    th.classList.toggle('sort-active', isActive);
+    const existingIcon = th.querySelector('.sort-icon');
+    if (isActive) {
+      const iconHtml = `<span class="sort-icon">${acctSortDir === 'asc' ? '▲' : '▼'}</span>`;
+      if (existingIcon) existingIcon.outerHTML = iconHtml;
+      else {
+        const tail = th.querySelector('.th-tail');
+        if (tail) tail.insertAdjacentHTML('beforeend', iconHtml);
+      }
+    } else if (existingIcon) {
+      existingIcon.remove();
+    }
+  });
+  acctQuickRefresh();
 }
 
 function setAcctTierFilter(tier) {
   acctTierFilter = tier;
-  renderAccountsOverview();
+  // Update tier buttons in-place
+  document.querySelectorAll('.tier-filter-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tier === tier);
+  });
   renderAccountsDonut();
+  acctQuickRefresh();
 }
 
 // Navigate to Customer Account tab for the given custNo

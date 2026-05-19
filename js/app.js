@@ -14,6 +14,7 @@ function switchTab(tab) {
   if (activeTab === 'store'       && typeof destroyStoreCharts       === 'function') destroyStoreCharts();
   if (activeTab === 'category'    && typeof destroyItemPerfCharts    === 'function') destroyItemPerfCharts();
   if (activeTab === 'leaderboard' && typeof destroyLeaderboardCharts === 'function') destroyLeaderboardCharts();
+  if (activeTab === 'rp' && typeof rpDrillChart !== 'undefined' && rpDrillChart) { try { rpDrillChart.destroy(); } catch(_){} rpDrillChart = null; }
 
   activeTab = tab;
 
@@ -21,9 +22,9 @@ function switchTab(tab) {
   const btn = document.getElementById('tab-btn-' + tab);
   if (btn) btn.classList.add('active');
 
-  ['item', 'category', 'store', 'leaderboard'].forEach(t => {
+  ['item', 'category', 'store', 'leaderboard', 'rp'].forEach(t => {
     const panel = document.getElementById('tab-' + t);
-    if (panel) panel.style.display = t === tab ? 'flex' : 'none';
+    if (panel) panel.style.display = t === tab ? (t === 'rp' || t === 'leaderboard' ? 'block' : 'flex') : 'none';
   });
 
   // Show/hide inline tab-bar search bars
@@ -48,6 +49,7 @@ function switchTab(tab) {
   if (tab === 'store'       && dataReady) renderStoreView();
   if (tab === 'category'    && dataReady) renderItemPerformanceView();
   if (tab === 'leaderboard' && dataReady) renderLeaderboardView();
+  if (tab === 'rp'          && typeof renderRepPerformance === 'function') renderRepPerformance();
 
   if (tab === 'item' && !caCustNo && typeof renderCAEmpty === 'function') {
     renderCAEmpty();
@@ -88,6 +90,4 @@ function switchRep() {
 
 // ── Nav search bar — live dropdown ───────────────────────────
 
-// ── Boot ──────────────────────────────────────────────────────
-
-loadData();
+// ── Boot — loadData is called by checkAuth() in auth.js after session is confirmed ──

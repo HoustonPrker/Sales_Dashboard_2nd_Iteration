@@ -169,15 +169,19 @@
 </head>
 <body>
 
+<!-- ── View-As Banner ──────────────────────────────────────── -->
+<div id="view-as-banner" style="display:none;background:#fef3c7;color:#92400e;padding:10px 24px;align-items:center;justify-content:space-between;font-size:14px;border-bottom:1px solid #fde68a;position:sticky;top:0;z-index:1000">
+  <span>&#128269; <strong id="view-as-name"></strong> &mdash; you are viewing this rep's data</span>
+  <a href="#" onclick="exitViewAs();return false;" style="color:#92400e;font-weight:600;text-decoration:none">&larr; Team View</a>
+</div>
+
 <!-- ── Nav Bar ─────────────────────────────────────────────── -->
 <nav class="nav-bar">
   <div class="nav-left">
     <div class="nav-icon">KS</div>
     <span class="nav-title">Kellis Sales</span>
   </div>
-  <div class="nav-center">
-    <button class="btn btn-ghost btn-sm" onclick="switchTab('store')">Home</button>
-  </div>
+  <div class="nav-center"></div>
   <div class="nav-right">
     <span class="nav-stat" id="toolbar-status">Loading...</span>
     <div id="nav-user-info" style="display:flex;align-items:center;gap:8px"></div>
@@ -226,13 +230,18 @@
   </div>
 
   <button class="tab-btn"        id="tab-btn-leaderboard" onclick="switchTab('leaderboard')">🏆 Leaderboard</button>
+  <button class="tab-btn"        id="tab-btn-rp"          onclick="switchTab('rp')" style="display:none">Rep Performance</button>
 </div>
 
 <!-- ── Loading Screen ──────────────────────────────────────── -->
 <div id="loading-screen" class="screen" style="display:flex">
   <div class="load-title">Loading Kellis Sales...</div>
   <div class="load-bar-outer"><div class="load-bar-inner"></div></div>
-  <div id="load-msg">Fetching accounts...</div>
+  <div style="display:flex;justify-content:space-between;width:280px;margin-bottom:6px">
+    <span id="load-pct" style="font-size:12px;font-weight:600;color:#3d5a80">0%</span>
+    <span id="load-eta" style="font-size:12px;color:#9ca3af"></span>
+  </div>
+  <div id="load-msg" style="font-size:13px;color:#6b7280">Fetching accounts...</div>
 </div>
 
 <!-- File picker removed — data now loaded from API -->
@@ -259,6 +268,9 @@
   <div id="tab-leaderboard" class="tab-panel" style="display:none;overflow-y:auto">
     <div id="leaderboard-panel" style="display:flex;flex-direction:column;min-height:100%"></div>
   </div>
+
+  <!-- Rep Performance tab panel -->
+  <div id="tab-rp" class="tab-panel" style="display:none;overflow-y:auto"></div>
 
 </div><!-- /#app-content -->
 
@@ -403,6 +415,7 @@
 <script src="js/views/customer-account.js"></script>
 <script src="js/views/item-performance.js"></script>
 <script src="js/views/leaderboard.js"></script>
+<script src="js/views/rep-performance.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

@@ -1,25 +1,227 @@
-{
-  "users": [
-    {
-      "username": "HOUSTONP",
-      "displayName": "Houston Parker",
-      "role": "admin",
-      "passwordHash": "$2b$10$gSLDqnlzBoV2YK.NKsaDF./RWsn0qJb14NwuqmDz..1Yj.aZl3mVC",
-      "createdAt": "2026-05-14T21:02:33.515Z"
-    },
-    {
-      "username": "MCARTR",
-      "displayName": "Mike Carter",
-      "role": "manager",
-      "passwordHash": "$2b$10$rmcyhpAK3nsoJu6QPxPdQ.72S2AwKvyyLmnCN8cA6hRThcZSJ.bqK",
-      "createdAt": "2026-05-14T21:02:33.584Z"
-    },
-    {
-      "username": "BHALL",
-      "displayName": "Brian Hall",
-      "role": "manager",
-      "passwordHash": "$2b$10$NdS89NC6kDWdDhL0N1LpMe3sOLkUYWXzZ1IGYYFpRfrsqKaZ6WXFu",
-      "createdAt": "2026-05-14T21:02:33.650Z"
-    }
-  ]
-}
+[
+  {
+    "username": "houstonp",
+    "displayName": "Houston Parker",
+    "role": "admin",
+    "is_super_admin": true,
+    "rep_prefix": null,
+    "active": true,
+    "notes": "Application owner. Sole super_admin."
+  },
+  {
+    "username": "mcarter",
+    "displayName": "Mike Carter",
+    "role": "admin",
+    "is_super_admin": false,
+    "rep_prefix": "MCARTR",
+    "active": true,
+    "notes": "Admin role. Has a sales book (MCARTR-* codes) — excluded from leaderboard rankings."
+  },
+  {
+    "username": "robertr",
+    "displayName": "Robert Rosenthal",
+    "role": "admin",
+    "is_super_admin": false,
+    "rep_prefix": "RROSEN",
+    "active": true,
+    "notes": "Admin role. Has a sales book (RROSEN-* codes) — excluded from leaderboard rankings."
+  },
+  {
+    "username": "curtt",
+    "displayName": "Curt Treece",
+    "role": "admin",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true,
+    "notes": "Director of Software."
+  },
+  {
+    "username": "alexs",
+    "displayName": "Alex Sloan",
+    "role": "admin",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true,
+    "notes": "Username guessed — verify against AD."
+  },
+  {
+    "username": "mikec",
+    "displayName": "Mike Cohen",
+    "role": "admin",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true,
+    "notes": "Username guessed — verify against AD."
+  },
+  {
+    "username": "justinc",
+    "displayName": "Justin Cohen",
+    "role": "admin",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true,
+    "notes": "Username guessed — verify against AD."
+  },
+  {
+    "username": "loric",
+    "displayName": "Lori Cohen",
+    "role": "admin",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true,
+    "notes": "Username guessed — verify against AD."
+  },
+  {
+    "username": "brianh",
+    "displayName": "Brian Hall",
+    "role": "manager",
+    "is_super_admin": false,
+    "rep_prefix": "BRIANH",
+    "active": true,
+    "notes": "Sales manager. Has a small sales book — excluded from leaderboard rankings."
+  },
+  {
+    "username": "lorav",
+    "displayName": "Lora Vaughan",
+    "role": "customer_service",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true
+  },
+  {
+    "username": "marcost",
+    "displayName": "Marcos Tirado",
+    "role": "customer_service",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true
+  },
+  {
+    "username": "mdesquare",
+    "displayName": "Michelle DeSquare",
+    "role": "customer_service",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true
+  },
+  {
+    "username": "mwhitlow",
+    "displayName": "Michelle Whitlow",
+    "role": "customer_service",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true
+  },
+  {
+    "username": "naquilam",
+    "displayName": "Naquila McDuffey",
+    "role": "customer_service",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true
+  },
+  {
+    "username": "samb",
+    "displayName": "Sam Bernal",
+    "role": "customer_service",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true
+  },
+  {
+    "username": "yelizab",
+    "displayName": "Yeliza Boucher",
+    "role": "customer_service",
+    "is_super_admin": false,
+    "rep_prefix": null,
+    "active": true
+  },
+  {
+    "username": "andreas",
+    "displayName": "Andrea Stoyle-Shields",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "ANDREAS",
+    "active": true
+  },
+  {
+    "username": "annab",
+    "displayName": "Anna Bukovich",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "ANNAB",
+    "active": true
+  },
+  {
+    "username": "bobf",
+    "displayName": "Bob Forrest",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "BOB",
+    "active": true
+  },
+  {
+    "username": "charlesm",
+    "displayName": "Charles Millsap",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "CHARLESM",
+    "active": true
+  },
+  {
+    "username": "jadap",
+    "displayName": "Jada Parker",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "JADAP",
+    "active": true
+  },
+  {
+    "username": "kenedyr",
+    "displayName": "Kenedy Reynoldson",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "KENEDYR",
+    "active": true
+  },
+  {
+    "username": "lesliw",
+    "displayName": "Lesli Welch",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "LESLIW",
+    "active": true
+  },
+  {
+    "username": "megann",
+    "displayName": "Megan Nichols",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "MEGAN",
+    "active": true
+  },
+  {
+    "username": "micheler",
+    "displayName": "Michele Rosenfeld",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "MICHEL",
+    "active": true
+  },
+  {
+    "username": "mjelinek",
+    "displayName": "Michael Jelinek",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "MJELIN",
+    "active": true
+  },
+  {
+    "username": "suer",
+    "displayName": "Sue Rampy",
+    "role": "advisor",
+    "is_super_admin": false,
+    "rep_prefix": "SUER",
+    "active": true
+  }
+]

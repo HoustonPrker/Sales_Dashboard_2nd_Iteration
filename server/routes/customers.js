@@ -9,6 +9,9 @@
 
 const express      = require('express');
 const router       = express.Router();
+const enforceRepScope = require('../middleware/enforceRepScope');
+const requireRoles    = require('../middleware/requireRoles');
+const { listUsers }   = require('../lib/user-store');
 const { doFetch, fetchAllPages, fetchAllPagesPar, ytdDateRange, aggregateLineItems, routeTimer, SALES_REP, pyMonthGlobalCache } = require('../lib/api');
 const { getAnnualGrowthPct, getMonthlyGrowthPct } = require('../lib/kellis-config');
 const categoryCache = require('../lib/category-cache');
@@ -19,6 +22,10 @@ const { monthBusinessDayContext, computePaceScore, computeYearRunRate } = requir
 // ── In-memory cache keyed by rep (15-minute TTL) ──────────────
 const accountsCache = {};  // { [rep]: { data, ts } }
 const CACHE_TTL     = 15 * 60 * 1000;
+
+const diskCache = require('../lib/disk-cache');
+// Hydrate in-memory cache from disk on startup
+Object.assign(accountsCache, diskCache.load());
 
 // ── Best-seller % cache (30-min TTL) — keyed by rep ──────────
 // Decoupled from accountsCache so 498 per-customer line-item calls
@@ -171,20 +178,11 @@ router.get('/accounts/basic', async (req, res) => {
   }
 });
 
-// ── GET /proxy/accounts?rep=REPNAME ──────────────────────────
-router.get('/accounts', async (req, res) => {
-  try {
-    // ?rep= query param overrides env SALES_REP
-    const rep = (req.query.rep || SALES_REP || '').trim();
-    const cacheKey = rep || '__all__';
-
-    if (accountsCache[cacheKey] && Date.now() - accountsCache[cacheKey].ts < CACHE_TTL) {
-      console.log(`⏱  GET /proxy/accounts → cache hit (${cacheKey})`);
-      return res.json(accountsCache[cacheKey].data);
-    }
-
+// ── Accounts: extracted build logic ──────────────────────────
+async function buildAccountsData(repParam, repPrefix, cacheKey) {
+    const repList   = [];  // unused — prefix filtering done after customer fetch
+    const repFilter = '';  // always fetch all, filter client-side by prefix
     const t0 = Date.now();
-    const repFilter = rep ? `filter=salesRep:eq:${encodeURIComponent(rep)}&` : '';
 
     // 1. Fetch customers + CY/PY ticket totals in parallel (3 calls total regardless of customer count)
     const now    = new Date();
@@ -197,7 +195,7 @@ router.get('/accounts', async (req, res) => {
     const pyStart   = `${yr - 1}-01-01`;
     const pyEnd     = `${yr - 1}-${mm}-${dd}`;
     const pyMtdStart = `${yr - 1}-${mm}-01`;
-    const repTicketFilter = rep ? `SalesRep:eq:${encodeURIComponent(rep)},` : '';
+    const repTicketFilter = repList.length === 1 ? `SalesRep:eq:${encodeURIComponent(repList[0])},` : '';
 
     const pyMonthStart   = `${yr - 1}-${mm}-01`;
     // Last day of the full prior-year same month (not today's day last year)
@@ -250,6 +248,19 @@ router.get('/accounts', async (req, res) => {
     ]);
     console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY / ${pyMonthTickets.length} pyMonth tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
 
+    // Keep customers with a sale in the last 24 months — excludes truly dormant/closed accounts
+    const cutoff = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const recentCustomers = customers.filter(c => c.lastSaleDate && c.lastSaleDate.slice(0, 10) >= cutoff);
+
+    // For advisors: filter to their rep prefix (e.g. MEGAN matches MEGAN, MEGAN-NEW, MEGAN-ACT)
+    const filteredCustomers = repPrefix
+      ? recentCustomers.filter(c => {
+          const rep = (c.salesRep || '').trim().toUpperCase();
+          return rep === repPrefix || rep.startsWith(repPrefix + '-');
+        })
+      : recentCustomers;
+    console.log(`  active filter: ${customers.length} total → ${filteredCustomers.length} (cutoff=${cutoff}${repPrefix ? ` prefix=${repPrefix}` : ''})`);
+
     // ── Best-seller % — use cached data immediately, recompute in background if stale ──
     // bsPctCache has a 30-min TTL independent of accountsCache (15 min) so the
     // 249×2=498 per-customer line-item calls only fire once every 30 min.
@@ -261,7 +272,7 @@ router.get('/accounts', async (req, res) => {
     if (bsPctStale && !bsPctInflight[cacheKey]) {
       // Fire-and-forget: recompute in background, update cache when done
       bsPctInflight[cacheKey] = true;
-      const _customers  = customers;
+      const _customers  = filteredCustomers;
       const _ytdStart   = ytdStart, _today = today;
       const _pyStart    = pyStart,  _pyEnd  = pyEnd;
       const _cacheKey   = cacheKey;
@@ -302,9 +313,10 @@ router.get('/accounts', async (req, res) => {
       else console.log(`  bsPct cache stale — serving cached, recomputing in background`);
     }
 
-    if (!customers.length) {
+    if (!filteredCustomers.length) {
       accountsCache[cacheKey] = { data: [], ts: Date.now() };
-      return res.json([]);
+      diskCache.save(accountsCache);
+      return [];
     }
 
     // 2. Aggregate ticket totals by custNo
@@ -375,7 +387,7 @@ router.get('/accounts', async (req, res) => {
     const pctYearElapsed  = yearRr.rate; // 0–1
 
     // 4. Build account records
-    const accounts = customers.map(c => {
+    const accounts = filteredCustomers.map(c => {
       const s          = salesMap[c.custNo] || { ytd: 0, mtd: 0, prior: 0, priorMtd: 0, priorMonth: 0, monthGoal: 0 };
       const ytdSales   = s.ytd;
       const mtdSales   = s.mtd;
@@ -458,11 +470,57 @@ router.get('/accounts', async (req, res) => {
     });
 
     accounts.sort((a, b) => b.ytdSales - a.ytdSales);
-    // Bust any stale cache entries that may have been built before this fix
-    Object.keys(accountsCache).forEach(k => { if (k !== cacheKey) delete accountsCache[k]; });
     accountsCache[cacheKey] = { data: accounts, ts: Date.now() };
-    routeTimer('GET /proxy/accounts', t0, { customers: customers.length, cyTickets: cyTickets.length, pyTickets: pyTickets.length });
-    res.json(accounts);
+
+    // When ALL cache builds, derive each advisor's subset for free — no extra API calls
+    if (!repPrefix) {
+      const advisors = listUsers().filter(u => u.role === 'advisor' && u.rep_prefix && u.active);
+      for (const u of advisors) {
+        const prefix = u.rep_prefix.toUpperCase();
+        const subset = accounts.filter(a => {
+          const rep = (a.salesRep || '').trim().toUpperCase();
+          return rep === prefix || rep.startsWith(prefix + '-');
+        });
+        accountsCache[u.rep_prefix] = { data: subset, ts: Date.now() };
+      }
+      console.log(`  advisor caches pre-populated for ${advisors.length} advisors`);
+    }
+
+    diskCache.save(accountsCache);  // persist all caches to disk
+    routeTimer('GET /proxy/accounts', t0, { customers: filteredCustomers.length, cyTickets: cyTickets.length, pyTickets: pyTickets.length });
+    return accounts;
+}
+
+// ── Fire-and-forget background refresh ───────────────────────
+const refreshInflight = {};  // cacheKey → Promise (while building) or false
+function triggerRefresh(repParam, repPrefix, cacheKey) {
+  if (refreshInflight[cacheKey]) return refreshInflight[cacheKey];
+  const p = buildAccountsData(repParam, repPrefix, cacheKey)
+    .catch(e => console.error('[accounts] background refresh error:', e.message))
+    .finally(() => { refreshInflight[cacheKey] = null; });
+  refreshInflight[cacheKey] = p;
+  return p;
+}
+
+// ── GET /proxy/accounts?rep=REPNAME ──────────────────────────
+router.get('/accounts', enforceRepScope, async (req, res) => {
+  const repParam  = (req.query.rep || SALES_REP || '').trim();
+  // prefix-based: repParam is either 'ALL' or a rep prefix (e.g. 'MEGAN')
+  const repPrefix = (repParam && repParam !== 'ALL') ? repParam.toUpperCase() : null;
+  const cacheKey  = repParam || '__all__';
+
+  const cached  = accountsCache[cacheKey];
+  const isStale = !cached || Date.now() - cached.ts > CACHE_TTL;
+
+  if (cached) {
+    if (isStale) triggerRefresh(repParam, repPrefix, cacheKey);  // background
+    return res.json(cached.data);  // serve immediately
+  }
+
+  // No cache yet — join the already-running warmup if possible, else start a new build
+  try {
+    await triggerRefresh(repParam, repPrefix, cacheKey);
+    return res.json(accountsCache[cacheKey]?.data || []);
   } catch (e) {
     console.error('/proxy/accounts error:', e.message);
     res.status(500).json({ error: e.message });
@@ -794,7 +852,7 @@ async function parallelLimit(fns, limit = 20) {
 }
 
 // ── GET /proxy/leaderboard ────────────────────────────────────
-router.get('/leaderboard', async (req, res) => {
+router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (req, res) => {
   if (req.query.refresh !== '1' && leaderboardCache.data && Date.now() - leaderboardCache.ts < LEADERBOARD_TTL) {
     return res.json(leaderboardCache.data);
   }
@@ -873,8 +931,16 @@ router.get('/leaderboard', async (req, res) => {
       nameMap[(u.usrId || '').trim().toUpperCase()] = (u.name || '').trim();
     });
 
+    // Only advisor-role users compete on the leaderboard — managers/admins with rep_prefix are excluded
+    const advisorPrefixes = new Set(
+      listUsers()
+        .filter(u => u.role === 'advisor' && u.rep_prefix && u.active)
+        .map(u => u.rep_prefix.toUpperCase())
+    );
     const repMap = {};
     activeReps.forEach(({ id }) => {
+      const prefix = id.toUpperCase().replace(/-.*$/, ''); // strip suffix like -NEW, -ACT
+      if (!advisorPrefixes.has(prefix) && !advisorPrefixes.has(id.toUpperCase())) return;
       const raw  = nameMap[id.toUpperCase()] || id;
       repMap[id] = raw.replace(/\s*[-–]\s*(ACTIVE|ACT)$/i, '').trim() || id;
     });
@@ -1059,4 +1125,110 @@ router.get('/leaderboard', async (req, res) => {
   }
 });
 
+// ── GET /proxy/rep-scorecard — manager/admin team overview ───────
+const repScorecardCache = { data: null, ts: 0 };
+const REP_SCORECARD_TTL = 5 * 60 * 1000;
+
+router.get('/rep-scorecard', requireRoles('manager', 'admin'), (req, res) => {
+  try {
+    // Serve from cache if fresh
+    if (repScorecardCache.data && Date.now() - repScorecardCache.ts < REP_SCORECARD_TTL) {
+      return res.json(repScorecardCache.data);
+    }
+
+    const now      = new Date();
+    const bdCtx    = monthBusinessDayContext(now);
+    const advisors = listUsers().filter(u => u.role === 'advisor' && u.rep_prefix && u.active);
+    const allAccts = accountsCache['ALL']?.data || [];
+
+    const advisorRows = advisors.map(u => {
+      const prefix = u.rep_prefix.toUpperCase();
+      const accts  = allAccts.filter(a => {
+        const rep = (a.salesRep || '').trim().toUpperCase();
+        return rep === prefix || rep.startsWith(prefix + '-');
+      });
+
+      const ytd          = accts.reduce((s, a) => s + (a.ytdSales   || 0), 0);
+      const mtd          = accts.reduce((s, a) => s + (a.mtdSales   || 0), 0);
+      const annual_goal  = accts.reduce((s, a) => s + (a.annualGoal || 0), 0);
+      const monthly_goal = accts.reduce((s, a) => s + (a.monthGoal  || 0), 0);
+
+      const pct_to_goal    = annual_goal  > 0 ? +(ytd / annual_goal  * 100).toFixed(2) : null;
+      const pct_to_monthly = monthly_goal > 0 ? +(mtd / monthly_goal * 100).toFixed(2) : null;
+
+      const healthy_count  = accts.filter(a => a.tier === 'Healthy').length;
+      const atrisk_count   = accts.filter(a => a.tier === 'AtRisk').length;
+      const critical_count = accts.filter(a => a.tier === 'Critical').length;
+
+      // Most-recently-ordered = min daysSinceOrder
+      const days_idle = accts.length > 0
+        ? Math.min(...accts.map(a => a.daysSinceOrder ?? 999))
+        : null;
+
+      // Pace score from leaderboard cache if available, else compute
+      let pace_score = null;
+      if (leaderboardCache.data) {
+        const lbRep = leaderboardCache.data.standings?.find(r => {
+          const lbPrefix = (r.repId || '').toUpperCase().replace(/-.*$/, '');
+          return lbPrefix === prefix || r.repId.toUpperCase() === prefix;
+        });
+        if (lbRep) pace_score = lbRep.paceScore;
+      }
+      if (pace_score === null && monthly_goal > 0 && bdCtx.total > 0) {
+        pace_score = +computePaceScore(mtd, monthly_goal, bdCtx.elapsed, bdCtx.total).toFixed(2);
+      }
+
+      return {
+        username:        u.username,
+        displayName:     u.displayName,
+        rep_prefix:      u.rep_prefix,
+        accounts:        accts.length,
+        ytd:             +ytd.toFixed(2),
+        annual_goal:     +annual_goal.toFixed(2),
+        pct_to_goal,
+        mtd:             +mtd.toFixed(2),
+        monthly_goal:    +monthly_goal.toFixed(2),
+        pct_to_monthly,
+        pace_score,
+        healthy_count,
+        atrisk_count,
+        critical_count,
+        days_idle,
+      };
+    });
+
+    const ytd_sum         = +advisorRows.reduce((s, r) => s + r.ytd, 0).toFixed(2);
+    const monthly_goal_sum = +advisorRows.reduce((s, r) => s + r.monthly_goal, 0).toFixed(2);
+    const mtd_sum         = +advisorRows.reduce((s, r) => s + r.mtd, 0).toFixed(2);
+    const on_pace_count   = advisorRows.filter(r => r.pace_score !== null && r.pace_score >= 0).length;
+    const critical_accts  = advisorRows.reduce((s, r) => s + r.critical_count, 0);
+
+    const payload = {
+      team: {
+        ytd_sum,
+        monthly_goal_sum,
+        mtd_sum,
+        on_pace_count,
+        critical_accts,
+        advisor_count: advisorRows.length,
+        business_days_elapsed: bdCtx.elapsed,
+        business_days_total:   bdCtx.total,
+        pct_elapsed:           +bdCtx.pctElapsed.toFixed(2),
+      },
+      advisors: advisorRows,
+    };
+
+    repScorecardCache.data = payload;
+    repScorecardCache.ts   = Date.now();
+    res.json(payload);
+  } catch (e) {
+    console.error('/proxy/rep-scorecard error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+function warmCache() {
+  triggerRefresh('ALL', null, 'ALL');  // stores promise in refreshInflight['ALL']
+}
 module.exports = router;
+module.exports.warmCache = warmCache;

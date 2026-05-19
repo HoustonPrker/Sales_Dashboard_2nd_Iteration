@@ -228,19 +228,33 @@ function renderOrderDetail(custNo, cust, order) {
 // ── Chart.js donut charts (matches accounts/customer-account style) ──
 
 function odRenderCompositionCharts(bsCount, totalCount, repeatCount, newCount) {
-  const CHART_OPTS = {
-    responsive: true,
-    maintainAspectRatio: false,
-    cutout: '58%',
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        callbacks: {
-          label: ctx => ` ${ctx.label}: ${ctx.parsed} lines`,
+  // Map chart slice index → odSetFilter key
+  const BS_FILTER_MAP = ['best', 'all'];   // index 0 = Best Sellers, 1 = Other
+  const NR_FILTER_MAP = ['repeat', 'new']; // index 0 = Repeat, 1 = New
+
+  function makeChartOpts(filterMap) {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '58%',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.label}: ${ctx.parsed} lines (click to filter)`,
+          },
         },
       },
-    },
-  };
+      onClick(event, elements) {
+        if (!elements.length) return;
+        const key = filterMap[elements[0].index];
+        if (key) odSetFilter(odFilter === key ? 'all' : key); // toggle off if already active
+      },
+      onHover(event, elements) {
+        event.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+      },
+    };
+  }
 
   const bsCtx = document.getElementById('od-bs-chart');
   if (bsCtx) {
@@ -256,7 +270,7 @@ function odRenderCompositionCharts(bsCount, totalCount, repeatCount, newCount) {
           borderWidth: 3,
         }],
       },
-      options: { ...CHART_OPTS },
+      options: makeChartOpts(BS_FILTER_MAP),
     });
   }
 
@@ -274,7 +288,7 @@ function odRenderCompositionCharts(bsCount, totalCount, repeatCount, newCount) {
           borderWidth: 3,
         }],
       },
-      options: { ...CHART_OPTS },
+      options: makeChartOpts(NR_FILTER_MAP),
     });
   }
 }
