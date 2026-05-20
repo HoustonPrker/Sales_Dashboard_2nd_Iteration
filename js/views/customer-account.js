@@ -905,6 +905,7 @@ function showMonthOrders(year, month) {
   }).sort((a, b) => new Date(b.date || b.ticketDate) - new Date(a.date || a.ticketDate));
 
   if (!orders.length) {
+    removeDrillTitleBar();
     drill.innerHTML = `<div style="padding:32px;text-align:center;color:#9ca3af;font-size:14px">No orders found for ${monthLabel}</div>`;
     return;
   }
@@ -925,14 +926,26 @@ function showMonthOrders(year, month) {
     </tr>`;
   }).join('');
 
+  const card2 = document.getElementById('ca-drill-card');
+  let tb2 = card2 && card2.querySelector('#ca-drill-titlebar');
+  if (!tb2 && card2) {
+    tb2 = document.createElement('div');
+    tb2.id = 'ca-drill-titlebar';
+    tb2.style.cssText = 'flex-shrink:0;border-bottom:1px solid #f3f4f6;background:#fff';
+    card2.insertBefore(tb2, drill);
+  }
+  if (tb2) {
+    tb2.innerHTML = `
+      <div style="padding:10px 14px 8px;display:flex;align-items:center;gap:10px">
+        <span style="font-weight:800;color:#1a2332;font-size:15px">${monthLabel}</span>
+        <span style="color:#9ca3af;font-size:13px">${orders.length} order${orders.length !== 1 ? 's' : ''}</span>
+        <span style="margin-left:auto;font-weight:700;color:#1a2332;font-size:15px">${fmt$(total)}</span>
+      </div>`;
+  }
+
   drill.innerHTML = `
-    <div style="padding:10px 14px 8px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #f3f4f6;background:#fff;position:sticky;top:0;z-index:3">
-      <span style="font-weight:800;color:#1a2332;font-size:15px">${monthLabel}</span>
-      <span style="color:#9ca3af;font-size:13px">${orders.length} order${orders.length !== 1 ? 's' : ''}</span>
-      <span style="margin-left:auto;font-weight:700;color:#1a2332;font-size:15px">${fmt$(total)}</span>
-    </div>
     <table class="data-table" style="width:100%">
-      <thead style="position:sticky;top:41px;z-index:2;background:#3d5a80">
+      <thead style="position:sticky;top:0;z-index:2;background:#3d5a80">
         <tr>
           <th style="padding:8px 12px;text-align:left;font-size:12px">Date</th>
           <th style="padding:8px 12px;text-align:left;font-size:12px">Order #</th>
@@ -1268,6 +1281,11 @@ function printCatTable() {
   }, 1000);
 }
 
+function removeDrillTitleBar() {
+  const tb = document.getElementById('ca-drill-titlebar');
+  if (tb) tb.remove();
+}
+
 // ── Item drill-down ───────────────────────────────────────────
 
 async function openCategoryDrill(custNo, category, defaultTab = 'best') {
@@ -1282,6 +1300,7 @@ async function openCategoryDrill(custNo, category, defaultTab = 'best') {
   const drill = document.getElementById('ca-drill-content');
   if (!drill) return;
 
+  removeDrillTitleBar();
   drill.innerHTML = `<div style="padding:24px;color:#6b7280;display:flex;align-items:center;justify-content:center;min-height:160px">Loading items for <strong style="margin-left:5px">${category}</strong>…</div>`;
 
   const enc = encodeURIComponent(custNo);
@@ -1297,7 +1316,7 @@ async function openCategoryDrill(custNo, category, defaultTab = 'best') {
     caDrill = { category, tab: defaultTab, ytdItems, topItems };
     renderItemDrill();
   } catch (e) {
-    if (drill) drill.innerHTML = `<div style="padding:20px;color:#dc2626">Error loading items: ${e.message}</div>`;
+    if (drill) { removeDrillTitleBar(); drill.innerHTML = `<div style="padding:20px;color:#dc2626">Error loading items: ${e.message}</div>`; }
   }
 }
 
@@ -1371,7 +1390,7 @@ function renderItemDrill() {
     </tr>` : '';
 
     tableHTML = `<table class="data-table">
-      <thead style="position:sticky;top:44px;z-index:2;background:#3d5a80"><tr>
+      <thead style="position:sticky;top:0;z-index:2;background:#3d5a80"><tr>
         ${th('rank',        '#',         'num-ctr')}
         ${th('status',      'Stat',      'num-ctr')}
         ${th('itemNo',      'Item #',    'num-ctr')}
@@ -1413,7 +1432,7 @@ function renderItemDrill() {
     </tr>` : '';
 
     tableHTML = `<table class="data-table">
-      <thead style="position:sticky;top:44px;z-index:2;background:#3d5a80"><tr>
+      <thead style="position:sticky;top:0;z-index:2;background:#3d5a80"><tr>
         ${th('rank',        '#',             'num-ctr')}
         ${th('status',      'Stat',          'num-ctr')}
         ${th('itemNo',      'Item #',        'num-ctr')}
@@ -1430,15 +1449,28 @@ function renderItemDrill() {
   const btnYtd  = `${btnBase};background:${tab==='ytd'?'#3d5a80':'#f8fafc'};color:${tab==='ytd'?'#fff':'#6b7280'}`;
   const btnBest = `${btnBase};border-left:1px solid #d1d5db;background:${tab==='best'?'#3d5a80':'#f8fafc'};color:${tab==='best'?'#fff':'#6b7280'}`;
 
-  sec.innerHTML = `
-    <div style="padding:10px 14px 8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid #f3f4f6;background:#fff;position:sticky;top:0;z-index:3">
-      <span style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80">${category}</span>
-      <div style="margin-left:auto;display:inline-flex;border:1px solid #d1d5db;border-radius:8px;overflow:hidden">
-        <button onclick="caDrillSwapTab('ytd')" style="${btnYtd}">YTD Purchased (${ytdItems.length})</button>
-        <button onclick="caDrillSwapTab('best')" style="${btnBest}">Best Sellers (${topItems.length})</button>
-      </div>
-    </div>
-    <div class="inv-wrap" style="margin:0;overflow:visible">${tableHTML}</div>`;
+  // Title bar goes into the card (non-scrolling); table goes into the scroll container.
+  // This lets thead top:0 and tfoot bottom:0 work without any offset arithmetic.
+  const card = document.getElementById('ca-drill-card');
+  let titleBar = card && card.querySelector('#ca-drill-titlebar');
+  if (!titleBar && card) {
+    titleBar = document.createElement('div');
+    titleBar.id = 'ca-drill-titlebar';
+    titleBar.style.cssText = 'flex-shrink:0;border-bottom:1px solid #f3f4f6;background:#fff';
+    card.insertBefore(titleBar, sec);
+  }
+  if (titleBar) {
+    titleBar.innerHTML = `
+      <div style="padding:10px 14px 8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:#3d5a80">${category}</span>
+        <div style="margin-left:auto;display:inline-flex;border:1px solid #d1d5db;border-radius:8px;overflow:hidden">
+          <button onclick="caDrillSwapTab('ytd')" style="${btnYtd}">YTD Purchased (${ytdItems.length})</button>
+          <button onclick="caDrillSwapTab('best')" style="${btnBest}">Best Sellers (${topItems.length})</button>
+        </div>
+      </div>`;
+  }
+
+  sec.innerHTML = `<div class="inv-wrap" style="margin:0;overflow:visible">${tableHTML}</div>`;
 }
 
 function caDrillSortBy(col) {
