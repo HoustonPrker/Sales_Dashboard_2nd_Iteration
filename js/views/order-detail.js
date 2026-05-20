@@ -101,7 +101,7 @@ function renderOrderDetail(custNo, cust, order) {
     <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:4px;padding:10px 12px">
       <div style="font-family:ui-monospace,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#fff;margin-bottom:4px;font-weight:600">${label}</div>
       <div style="font-size:19px;font-weight:600;color:#fff;line-height:1.2">${value}</div>
-      <div style="font-size:11px;color:#fff;margin-top:2px">${sub}</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.8);margin-top:2px">${sub}</div>
     </div>`;
 
   const vsPriorValue = vsPriorPct !== null
