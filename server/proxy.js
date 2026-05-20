@@ -33,6 +33,14 @@ app.use('/proxy', require('./routes/items'));
 app.use('/proxy', require('./routes/overview'));
 app.use('/proxy/ai', require('./routes/ai'));
 
+// Admin UI page — auth-gated so non-admins can't even fetch the HTML
+app.get('/admin/users', (req, res, next) => {
+  const { getSession } = require('./lib/sessions');
+  const session = getSession(req.cookies?.kellis_session);
+  if (!session || session.role !== 'admin') return res.redirect('/login.html');
+  next();
+}, (_req, res) => res.sendFile(path.resolve(__dirname, '../admin/users.html')));
+
 // Static files
 app.use(express.static(path.resolve(__dirname, '..')));
 

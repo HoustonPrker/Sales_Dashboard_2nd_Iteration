@@ -20,10 +20,17 @@ function getSession(id) {
 
 function deleteSession(id) { if (id) sessions.delete(id); }
 
+function kickUser(username) {
+  const lower = (username || '').toLowerCase();
+  for (const [id, s] of sessions.entries()) {
+    if ((s.username || '').toLowerCase() === lower) sessions.delete(id);
+  }
+}
+
 function updateSession(id, updates) {
   const session = getSession(id);
   if (!session) return;
   sessions.set(id, { ...session, ...updates });
 }
 
-module.exports = { createSession, getSession, deleteSession, updateSession };
+module.exports = { createSession, getSession, deleteSession, updateSession, kickUser };

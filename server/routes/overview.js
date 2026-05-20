@@ -79,24 +79,30 @@ router.get('/rep-overview', async (req, res) => {
     const repTktFilter   = isAll ? '' : `SalesRep:eq:${repEnc},`;
     const custRepFilter  = isAll ? '' : `filter=salesRep:eq:${repEnc}&`;
 
+    // For isAll (admin), the unfiltered pos/ticket-history queries span the entire company's
+    // transaction history and are too large for sequential pagination — they time out or NCR
+    // returns empty. MTD and active-account KPIs are derived client-side from accountsData
+    // instead (it's already loaded and has per-account mtdSales + daysSinceOrder).
+    // The by-sales-rep daily aggregates use fetchAllPagesPar for speed; NCR may still return
+    // empty without a rep filter — the client falls back to accountsData in that case too.
     const [cyDays, repCustomers, pyYtdDays, mtdTickets, pyMonthAllTickets, tickets180] = await Promise.all([
-      // CY YTD daily rows (for avg ticket/lines)
-      fetchAllPages(
+      // CY YTD daily rows (for avg ticket/lines) — parallel pagination
+      fetchAllPagesPar(
         `/api/v1/sales-analysis/by-sales-rep?filter=${repSalesFilter}postDate:gte:${ytdStart},postDate:lte:${today}&fields=postDate,ticketCount,saleSubTotal,saleLines&pageSize=200`
       ),
       // Current customer list — needed to scope pyMonth tickets to this rep's accounts
       fetchAllPages(`/api/v1/Customers?${custRepFilter}fields=custNo&pageSize=200`),
-      // PY YTD daily rows (for avg ticket/lines prior year)
-      fetchAllPages(
+      // PY YTD daily rows (for avg ticket/lines prior year) — parallel pagination
+      fetchAllPagesPar(
         `/api/v1/sales-analysis/by-sales-rep?filter=${repSalesFilter}postDate:gte:${pyYtdStart},postDate:lte:${pyYtdEnd}&fields=postDate,ticketCount,saleSubTotal,saleLines&pageSize=200`
       ),
-      // MTD ticket headers — source of MTD total, active accounts, avg lines, % invoiced
-      fetchAllPages(
+      // MTD ticket headers — skip for ALL (too large); client derives from accountsData
+      isAll ? Promise.resolve([]) : fetchAllPagesPar(
         `/api/v1/pos/ticket-history?filter=${repTktFilter}BusinessDate:gte:${mtdStart},BusinessDate:lte:${today}&fields=TicketNo,Total,SaleLines,CustNo,CustPoNo,BusinessDate&pageSize=200`
       ),
       pyMonthAllPromise,
-      // 180-day window — unique CustNos for "active accounts" KPI
-      fetchAllPages(
+      // 180-day window — skip for ALL (too large); client derives from accountsData
+      isAll ? Promise.resolve([]) : fetchAllPagesPar(
         `/api/v1/pos/ticket-history?filter=${repTktFilter}BusinessDate:gte:${date180},BusinessDate:lte:${today}&fields=CustNo&pageSize=500`
       ),
     ]);
@@ -129,10 +135,12 @@ router.get('/rep-overview', async (req, res) => {
     const dailySalesNeeded = remainingBD > 0 && gap > 0 ? +(gap / remainingBD).toFixed(2) : 0;
 
     // ── Active accounts — 180-day window and MTD ─────────────────────────
+    // For ALL, tickets180 and mtdTickets are [] (skipped above). Return -1 as sentinel;
+    // the client will compute from accountsData.daysSinceOrder and mtdSales.
     const mtdCustNosSet   = new Set(mtdTickets.map(t => (t.CustNo || t.custNo || '').trim()).filter(Boolean));
-    const mtdActiveAccounts  = mtdCustNosSet.size;
+    const mtdActiveAccounts  = isAll ? -1 : mtdCustNosSet.size;
     const active180CustNos   = new Set(tickets180.map(t => (t.CustNo || t.custNo || '').trim()).filter(Boolean));
-    const activeAccounts     = active180CustNos.size; // shown in KPI pill (180-day definition)
+    const activeAccounts     = isAll ? -1 : active180CustNos.size;
 
     // ── % Invoiced — tickets that carry a customer PO number ─────────────
     // A ticket with CustPoNo means the customer issued a PO; sale is invoiced/shipped.

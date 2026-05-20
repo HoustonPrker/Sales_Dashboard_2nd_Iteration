@@ -246,6 +246,16 @@ async function fetchCategoryItems(cat) {
   return rows;
 }
 
+function formatDisplayUnit(prefUnitNam, prefUnitNumer) {
+  if (!prefUnitNam) return '—';
+  const unitCode = String(prefUnitNam).trim().toUpperCase();
+  if (unitCode === 'EA' || unitCode === 'EACH') return 'Each';
+  if (/\d/.test(unitCode)) return unitCode;
+  const qty = prefUnitNumer ? Number(prefUnitNumer) : null;
+  if (qty && qty > 0) return `${unitCode}${qty}`;
+  return unitCode;
+}
+
 // ── GET /proxy/recommended-items?categories=CAT1,CAT2 ────────
 router.get('/recommended-items', async (req, res) => {
   try {
@@ -264,18 +274,20 @@ router.get('/recommended-items', async (req, res) => {
     const result = [];
 
     for (const pass of ['Y', '']) {
-      for (const items of itemSets) {
+      for (let ci = 0; ci < itemSets.length; ci++) {
+        const items    = itemSets[ci];
+        const category = categories[ci];
         const filtered = pass === 'Y' ? items.filter(i => i.profCod1 === 'Y') : items;
         for (const item of filtered) {
           if (!item.itemNo || seen.has(item.itemNo)) continue;
           seen.add(item.itemNo);
           result.push({
+            category,
             itemNo:      item.itemNo,
             description: item.description || item.itemNo,
             upc:         item.barcode || item.barcod3Of9 || '',
             caseCost:    parseFloat(item.lastCost || 0),
-            unitQty:     item.prefUnitNumer > 0 ? item.prefUnitNumer : 0,
-            unit:        item.prefUnitNam || item.prefUnit || item.stockingUnit || '',
+            displayUnit: formatDisplayUnit(item.prefUnitNam || item.prefUnit || item.stockingUnit || '', item.prefUnitNumer),
           });
           if (result.length >= 15) break;
         }
@@ -466,6 +478,23 @@ router.get('/item-stats/:itemNo', async (req, res) => {
     res.json(data);
   } catch (e) {
     console.error('/proxy/item-stats error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── DIAGNOSTIC: dump all fields for an item (remove after investigation) ──
+router.get('/item-fields/:itemNo', async (req, res) => {
+  try {
+    const itemNo = req.params.itemNo;
+    const [single, list] = await Promise.all([
+      doFetch('GET', `/api/v1/Items/${encodeURIComponent(itemNo)}`).then(r => r.json()),
+      doFetch('GET', `/api/v1/Items?filter=itemNo:eq:${encodeURIComponent(itemNo)}&pageSize=1`).then(r => r.json()),
+    ]);
+    const singleItem = single.data || single;
+    const listItem   = (list.data || list)[0] || {};
+    const onlyInSingle = Object.keys(singleItem).filter(k => !(k in listItem));
+    res.json({ singleItem, listItem, onlyInSingle });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });

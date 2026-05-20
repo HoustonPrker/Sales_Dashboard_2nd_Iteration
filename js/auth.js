@@ -23,11 +23,17 @@ async function checkAuth() {
 function renderNavUser(user) {
   const el = document.getElementById('nav-user-info');
   if (!el) return;
-  const roleLabel = { admin: 'Admin', manager: 'Manager', advisor: 'Advisor', customer_service: 'CS' }[user.role] || user.role;
-  const roleBg    = { admin: '#7c3aed', manager: '#0d9488', advisor: '#3d5a80', customer_service: '#b45309' }[user.role] || '#6b7280';
+  const roleLabel = user.is_super_admin ? 'Super Admin'
+    : { admin: 'Admin', manager: 'Manager', advisor: 'Advisor', customer_service: 'CS' }[user.role] || user.role;
+  const roleBg = user.is_super_admin ? '#b91c1c'
+    : { admin: '#7c3aed', manager: '#0d9488', advisor: '#3d5a80', customer_service: '#b45309' }[user.role] || '#6b7280';
+  const gearBtn = user.role === 'admin' ? `
+    <a href="/admin/users" title="Account Manager" style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:5px;background:rgba(255,255,255,0.1);color:#cbd5e1;text-decoration:none;font-size:15px;transition:background 0.15s" onmouseover="this.style.background='rgba(255,255,255,0.2)'" onmouseout="this.style.background='rgba(255,255,255,0.1)'">⚙</a>
+  ` : '';
   el.innerHTML = `
     <span style="font-size:13px;color:#cbd5e1">${user.displayName}</span>
     <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:${roleBg};color:#fff;text-transform:uppercase;letter-spacing:0.05em">${roleLabel}</span>
+    ${gearBtn}
     <button onclick="ksLogout()" style="background:rgba(255,255,255,0.1);border:none;color:#cbd5e1;padding:4px 10px;border-radius:5px;font-size:12px;cursor:pointer;font-family:inherit">Logout</button>
   `;
 

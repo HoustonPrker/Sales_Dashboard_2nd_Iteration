@@ -66,18 +66,19 @@ const LB_STYLES = `
   }
   #leaderboard-panel .lb-ribbon-eyebrow {
     font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.22em;
+    font-size: 15px;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: rgba(255,255,255,0.55);
+    font-weight: 700;
+    color: #fff;
     margin-bottom: 10px;
   }
   #leaderboard-panel .lb-ribbon-headline {
-    font-size: 28px;
-    font-weight: 600;
+    font-size: 32px;
+    font-weight: 800;
     letter-spacing: -0.02em;
     color: #fff;
-    margin-bottom: 18px;
+    margin-bottom: 0;
     line-height: 1.15;
   }
   #leaderboard-panel .lb-ribbon-winner {
@@ -142,15 +143,15 @@ const LB_STYLES = `
   }
   #leaderboard-panel .lb-podium-box {
     border-radius: 8px;
-    padding: 22px 18px 18px;
+    padding: 32px 24px 32px;
     position: relative;
     overflow: hidden;
   }
   #leaderboard-panel .lb-ghost {
     position: absolute;
-    top: -8px;
+    top: -12px;
     right: 10px;
-    font-size: 110px;
+    font-size: 150px;
     font-weight: 800;
     line-height: 1;
     pointer-events: none;
@@ -166,19 +167,19 @@ const LB_STYLES = `
     margin-bottom: 8px;
   }
   #leaderboard-panel .lb-podium-name {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 600;
     letter-spacing: -0.01em;
-    margin-bottom: 10px;
+    margin-bottom: 14px;
     color: var(--ink);
     line-height: 1.2;
   }
   #leaderboard-panel .lb-podium-pct {
-    font-size: 34px;
+    font-size: 48px;
     font-weight: 700;
     letter-spacing: -0.02em;
     line-height: 1;
-    margin-bottom: 6px;
+    margin-bottom: 10px;
   }
   #leaderboard-panel .lb-podium-sub {
     font-family: var(--mono);
@@ -211,10 +212,10 @@ const LB_STYLES = `
   #leaderboard-panel .lb-table thead th.num { text-align: right; }
   #leaderboard-panel .lb-table thead th.ctr { text-align: center; }
   #leaderboard-panel .lb-table tbody td {
-    padding: 12px 14px;
+    padding: 7px 14px;
     border-bottom: 1px solid var(--soft);
     vertical-align: middle;
-    font-size: 14px;
+    font-size: 13px;
   }
   #leaderboard-panel .lb-table tbody tr:last-child td { border-bottom: none; }
   #leaderboard-panel .lb-table tbody tr:hover td { background: #f5f5f4; }
@@ -305,28 +306,35 @@ function renderLBLayout(data) {
     ? new Date(updatedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
     : '—';
 
-  const bdPct  = businessDays ? Math.round(businessDays.pctElapsed) : null;
-  const bdNote = businessDays
-    ? `${currentMonthLabel} · Race in Progress · ${bdPct}% Through the Business Month · ${businessDays.elapsed} of ${businessDays.total} Days Elapsed`
-    : currentMonthLabel;
+  const bdPct     = businessDays ? Math.round(businessDays.pctElapsed) : null;
+  const bdSubLine = businessDays
+    ? `${businessDays.elapsed} of ${businessDays.total} business days · ${bdPct}% elapsed`
+    : '';
 
   panel.innerHTML = `
-    ${renderLBToolbar(updatedTime)}
     ${renderLBRibbon(awards, lastMonthLabel, updatedTime)}
-    <div class="lb-section-label">${bdNote}</div>
+    <div style="margin-top:28px;padding:0 28px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between">
+        <div>
+          <div style="font-size:24px;font-weight:600;letter-spacing:-0.01em;text-transform:uppercase;color:var(--ink);line-height:1.1">${currentMonthLabel} — Race in Progress</div>
+          ${bdSubLine ? `<div style="font-size:13px;color:var(--muted);margin-top:4px">${bdSubLine}</div>` : ''}
+        </div>
+        <button onclick="renderLeaderboardView(true)" class="lb-toolbar-btn" style="margin-top:4px">↺ Refresh</button>
+      </div>
+      <hr style="border:none;border-top:1px solid #e7e5e4;margin:14px 0 20px">
+    </div>
     ${renderLBPodium(podium, businessDays)}
-    <div class="lb-section-label" style="padding-top:8px">Full Standings · ${currentMonthLabel}</div>
+    <div style="padding:8px 28px 10px;display:flex;align-items:center;gap:12px">
+      <span style="font-family:var(--mono);font-size:10px;letter-spacing:0.20em;text-transform:uppercase;color:var(--muted)">Full Standings</span>
+      <div style="flex:1;height:1px;background:#e7e5e4"></div>
+    </div>
     ${renderLBStandings(standings)}`;
 }
 
 // ── Toolbar ───────────────────────────────────────────────────
 
 function renderLBToolbar(updatedTime) {
-  return `
-    <div class="lb-toolbar">
-      <span class="lb-toolbar-ts">Last updated ${updatedTime}</span>
-      <button class="lb-toolbar-btn" onclick="renderLeaderboardView(true)">↻ Refresh</button>
-    </div>`;
+  return '';
 }
 
 // ── KPI Ribbon ────────────────────────────────────────────────
@@ -338,41 +346,27 @@ function renderLBRibbon(awards, lastMonthLabel, updatedTime) {
   const month = lastMonthLabel.split(' ')[0];
   const year  = lastMonthLabel.split(' ')[1] || '';
 
-  const eyebrow  = `🏆 SALESPERSON OF THE MONTH · ${lastMonthLabel.toUpperCase()} · FINAL RESULTS`;
-  const headline = sotm
-    ? `<span class="lb-ribbon-winner">${sotm.repName}</span> Won ${month}`
-    : `${month} — No Winner Determined`;
-
-  const tile = (label, value, sub) => `
-    <div class="lb-ribbon-tile">
-      <div class="lb-tile-label">${label}</div>
-      <div class="lb-tile-value">${value}</div>
-      <div class="lb-tile-sub">${sub}</div>
+  const awardCol = (label, headline) => `
+    <div style="flex:1;min-width:0;padding:0 28px 0 0">
+      <div class="lb-ribbon-eyebrow">${label}</div>
+      <div class="lb-ribbon-headline">${headline}</div>
     </div>`;
 
-  const winnerTile = tile(
-    `Last Month's Winner`,
-    sotm ? sotm.repName : '—',
-    sotm ? `${month} ${year}` : 'no goals set'
-  );
-  const miTile = tile(
-    'Most Improved',
-    mi ? mi.repName : '—',
-    mi ? `+${mi.improvementPts} pts vs prior month` : 'insufficient data'
-  );
-  const mcTile = tile(
-    'Most Consistent',
-    mc ? mc.repName : '—',
-    mc ? (mc.totalNegative === 0 ? 'No decline over 3 months' : `${mc.totalNegative.toFixed(1)} pts negative drift`) : 'insufficient data'
-  );
+  const sotmHeadline = sotm
+    ? `<span class="lb-ribbon-winner">${sotm.repName}</span> Won ${month}`
+    : `${month} — No Winner`;
+  const miHeadline = mi ? mi.repName : '—';
+  const mcHeadline = mc ? mc.repName : '—';
 
   return `
     <div class="lb-ribbon">
-      <div class="lb-ribbon-eyebrow">${eyebrow}</div>
-      <div class="lb-ribbon-headline">${headline}</div>
-      <hr class="lb-ribbon-divider">
-      <div class="lb-ribbon-tiles">
-        ${winnerTile}${miTile}${mcTile}
+      <div style="font-family:var(--mono);font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:16px">${lastMonthLabel.toUpperCase()} — FINAL RESULTS</div>
+      <div style="display:flex;align-items:flex-start;gap:0">
+        ${awardCol('🏆 Salesperson of the Month Winner', sotmHeadline)}
+        <div style="width:1px;background:rgba(255,255,255,0.15);align-self:stretch;margin-right:28px"></div>
+        ${awardCol('Most Improved', miHeadline)}
+        <div style="width:1px;background:rgba(255,255,255,0.15);align-self:stretch;margin-right:28px"></div>
+        ${awardCol('Most Consistent', mcHeadline)}
       </div>
     </div>`;
 }
@@ -400,19 +394,19 @@ function renderLBPodium(podium, businessDays) {
       label: '👑 1st Place', marginTop: 0,
       bg: `background:var(--gold-bg);border:2px solid var(--gold-bdr)`,
       ghost: 'rgba(0,0,0,0.05)', placeClr: '#92400e',
-      pctClr: '#b45309', nameSize: '19px', pctSize: '36px',
+      pctClr: '#b45309', nameSize: '22px', pctSize: '48px',
     },
     2: {
-      label: '2nd Place', marginTop: 30,
+      label: '2nd Place', marginTop: 18,
       bg: `background:var(--silver-bg);border:2px solid var(--silver-bdr)`,
       ghost: 'rgba(0,0,0,0.04)', placeClr: '#475569',
-      pctClr: '#334155', nameSize: '17px', pctSize: '30px',
+      pctClr: '#334155', nameSize: '20px', pctSize: '44px',
     },
     3: {
-      label: '3rd Place', marginTop: 46,
+      label: '3rd Place', marginTop: 34,
       bg: `background:var(--bronze-bg);border:2px solid var(--bronze-bdr)`,
       ghost: 'rgba(0,0,0,0.05)', placeClr: '#9a3412',
-      pctClr: '#c2410c', nameSize: '17px', pctSize: '30px',
+      pctClr: '#c2410c', nameSize: '20px', pctSize: '44px',
     },
   };
 
@@ -450,55 +444,43 @@ function renderLBStandings(standings) {
   const loggedInRep = (typeof currentRep !== 'undefined' ? currentRep : '').trim().toUpperCase();
 
   const rows = standings.map(r => {
-    const isYou = loggedInRep && r.repId.toUpperCase() === loggedInRep;
-
-    const pctStr = r.pctToGoal !== null ? r.pctToGoal.toFixed(1) + '%' : '—';
+    const isYou   = loggedInRep && r.repId.toUpperCase() === loggedInRep;
+    const pctStr  = r.pctToGoal  !== null ? r.pctToGoal.toFixed(1)  + '%' : '—';
+    const hlthStr = r.pctHealthy !== null ? r.pctHealthy + '%' : '—';
     const rankClr = r.standingsRank === 1 ? '#b45309' : 'var(--muted)';
-
-    // Pace bar
-    const pace = r.paceScore;
-    let paceClr, barClr;
-    if (pace === null) {
-      paceClr = 'var(--muted)'; barClr = '#d1d5db';
-    } else if (pace >= -5) {
-      paceClr = '#15803d'; barClr = '#16a34a';
-    } else if (pace >= -15) {
-      paceClr = '#b45309'; barClr = '#d97706';
-    } else {
-      paceClr = '#991b1b'; barClr = '#dc2626';
-    }
-    const barPct = pace !== null ? Math.min(100, Math.max(0, 50 + pace)) : 0;
-    const paceStr = pace !== null ? (pace >= 0 ? `+${pace.toFixed(1)}` : pace.toFixed(1)) : '—';
-
-    const paceCell = `
-      <div class="lb-pace-wrap">
-        <div class="lb-pace-bar-bg">
-          <div class="lb-pace-bar-fill" style="width:${barPct}%;background:${barClr}"></div>
-        </div>
-        <span class="lb-pace-score" style="color:${paceClr}">${paceStr}</span>
-      </div>`;
+    const ctr     = 'text-align:center';
+    const mono    = 'font-family:var(--mono);font-size:13px;font-weight:600;color:var(--ink)';
 
     return `
       <tr style="${isYou ? 'background:#f0fdf4;border-left:3px solid #16a34a' : ''}">
-        <td style="text-align:center"><span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${rankClr}">${r.standingsRank}</span></td>
+        <td style="${ctr}"><span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${rankClr}">${r.standingsRank}</span></td>
         <td>
           <span class="lb-rep-name">${r.repName}</span>
           ${isYou ? `<span style="display:inline-block;font-family:var(--mono);font-size:9px;letter-spacing:0.10em;text-transform:uppercase;padding:2px 5px;border-radius:3px;background:#16a34a;color:#fff;margin-left:6px;vertical-align:middle">You</span>` : ''}
         </td>
-        <td style="text-align:right"><span style="font-family:var(--mono);font-size:13px;font-weight:600;color:var(--ink)">${pctStr}</span></td>
-        <td>${paceCell}</td>
+        <td style="${ctr}"><span style="${mono}">${r.accountCount ?? '—'}</span></td>
+        <td style="${ctr}"><span style="${mono}">${hlthStr}</span></td>
+        <td style="${ctr}"><span style="${mono}">${pctStr}</span></td>
       </tr>`;
   });
 
   return `
     <div class="lb-table-wrap">
-      <table class="lb-table">
+      <table class="lb-table" style="table-layout:fixed;width:100%">
+        <colgroup>
+          <col style="width:60px">
+          <col style="width:160px">
+          <col style="width:120px">
+          <col style="width:120px">
+          <col style="width:160px">
+        </colgroup>
         <thead>
           <tr>
-            <th class="ctr" style="width:40px">#</th>
+            <th class="ctr">#</th>
             <th>Rep</th>
-            <th class="num">% to Goal</th>
-            <th>Pace</th>
+            <th class="ctr">Accounts</th>
+            <th class="ctr">% Healthy</th>
+            <th class="ctr">% to Monthly Goal</th>
           </tr>
         </thead>
         <tbody>${rows.join('')}</tbody>

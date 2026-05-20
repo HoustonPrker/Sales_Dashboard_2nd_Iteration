@@ -82,7 +82,7 @@ body {
 .main-content {
   flex: 1; padding: 20px 24px; display: flex; flex-direction: column;
 }
-.tab-panel { flex: 1; display: flex; flex-direction: column; }
+.tab-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 /* ── SCREENS ──────────────────────────────── */
 .screen {
@@ -781,6 +781,8 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
   /* Hide everything except the order detail panel */
   .nav-bar, .tab-bar, .main-content > *:not(#tab-item),
   #tab-accounts, #tab-leaderboard, #tab-ip,
+  #acct-ai-tab, #ca-ai-tab, #acct-ai-overlay, #ca-ai-overlay,
+  #acct-ai-drawer, #ca-ai-drawer,
   .od-no-print { display: none !important; }
 
   /* Show and expand the item tab panel */
@@ -798,14 +800,20 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
     print-color-adjust: exact;
   }
 
-  /* KPI pills on white background */
-  .od-kpi-pill {
+  /* KPI pills on white background — pills use .mgr-pill inside #od-header */
+  #od-header .mgr-pill {
     background: #f0f4f8 !important;
     border: 1px solid #cbd5e1 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  .od-kpi-pill div { color: #1a2332 !important; }
+  #od-header .mgr-pill,
+  #od-header .mgr-pill-label,
+  #od-header .mgr-pill-value,
+  #od-header .mgr-pill-sub { color: #1a2332 !important; }
+
+  /* Identity column text */
+  #od-header span, #od-header div { color: #1a2332 !important; }
 
   /* Force color printing for tags and margin colors */
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -830,3 +838,24 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
 .rp-pace-score.rp-warn    { color: #d97706; }
 .rp-pace-score.rp-behind  { color: #c2410c; }
 .rp-pace-score.rp-neutral { color: #9ca3af; }
+
+/* ── Rep Performance — percent cell color coding ── */
+.rp-pct-green   { color: #15803d; font-weight: 700; }
+.rp-pct-neutral { color: #374151; }
+.rp-pct-amber   { color: #d97706; font-weight: 600; }
+.rp-pct-red     { color: #dc2626; font-weight: 600; }
+
+/* ── Skeleton shimmer loader ── */
+@keyframes rp-shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position: 600px 0; }
+}
+.rp-skeleton {
+  background: linear-gradient(90deg, #e5e7eb 25%, #f3f4f6 50%, #e5e7eb 75%);
+  background-size: 600px 100%;
+  animation: rp-shimmer 1.4s infinite linear;
+  border-radius: 4px;
+  display: inline-block;
+}
+.rp-skeleton-header { height: 32px; width: 100%; margin-bottom: 16px; border-radius: 6px; }
+.rp-skeleton-row    { height: 44px; width: 100%; margin-bottom: 6px; border-radius: 4px; }

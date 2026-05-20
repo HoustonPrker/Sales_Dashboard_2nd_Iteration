@@ -1,11 +1,11 @@
 // ============================================================
-// Rep Performance View — editorial redesign
+// Rep Performance View
 // Renders into #tab-rp — accessible to manager/admin only.
 // Data source: GET /proxy/rep-scorecard
 // ============================================================
 
 let rpData         = null;
-let rpSortCol      = 'pct_to_goal';
+let rpSortCol      = 'pct_to_monthly';
 let rpSortDir      = -1;   // -1 = desc, 1 = asc
 let rpDrillAdvisor = null;
 let rpDrillChart   = null;
@@ -33,40 +33,48 @@ function rpMonthLabel() {
   return `${months[now.getMonth()]} ${now.getFullYear()}`;
 }
 
+// ── Pace class ────────────────────────────────────────────────
+
+function rpPctClass(pct, pctElapsed) {
+  if (pct == null || pctElapsed == null) return 'rp-pct-neutral';
+  const delta = pct - pctElapsed;
+  if (delta >= 0)   return 'rp-pct-green';
+  if (delta >= -5)  return 'rp-pct-neutral';
+  if (delta >= -15) return 'rp-pct-amber';
+  return 'rp-pct-red';
+}
+
+function rpPaceClass(paceScore) {
+  if (paceScore == null) return 'rp-neutral';
+  if (paceScore >= -5)  return 'rp-ok';
+  if (paceScore >= -15) return 'rp-warn';
+  return 'rp-behind';
+}
+
 // ── Sort ──────────────────────────────────────────────────────
 
 const COL_MAP = {
-  displayName:     a => (a.displayName || '').toLowerCase(),
-  accounts:        a => a.accounts,
-  ytd:             a => a.ytd,
-  pct_to_goal:     a => a.pct_to_goal    ?? -Infinity,
-  mtd:             a => a.mtd,
-  pct_to_monthly:  a => a.pct_to_monthly ?? -Infinity,
-  pace_score:      a => a.pace_score     ?? -Infinity,
-  healthy_count:   a => a.healthy_count,
-  atrisk_count:    a => a.atrisk_count,
-  days_idle:       a => a.days_idle      ?? Infinity,
+  displayName:      a => (a.displayName || '').toLowerCase(),
+  ytd:              a => a.ytd,
+  pct_to_goal:      a => a.pct_to_goal      ?? -Infinity,
+  dollar_to_annual: a => a.annual_goal - a.ytd,
+  annual_goal:      a => a.annual_goal,
+  mtd:              a => a.mtd,
+  pct_to_monthly:   a => a.pct_to_monthly   ?? -Infinity,
+  dollar_to_monthly:a => a.monthly_goal - a.mtd,
+  monthly_goal:     a => a.monthly_goal,
+  healthy_count:    a => a.healthy_count,
+  critical_count:   a => a.critical_count,
 };
 
 function rpSortedAdvisors(advisors) {
-  const fn = COL_MAP[rpSortCol] || (a => a.ytd);
+  const fn = COL_MAP[rpSortCol] || (a => a.mtd);
   return [...advisors].sort((a, b) => {
     const av = fn(a), bv = fn(b);
     if (av < bv) return rpSortDir;
     if (av > bv) return -rpSortDir;
     return 0;
   });
-}
-
-function rpSortLabel() {
-  const map = {
-    displayName: 'name', accounts: 'account count', ytd: 'YTD sales',
-    pct_to_goal: '% goal achieved', mtd: 'MTD sales',
-    pct_to_monthly: '% monthly goal', pace_score: 'pace score',
-    healthy_count: 'healthy accounts', atrisk_count: 'at-risk accounts',
-    days_idle: 'idle days',
-  };
-  return map[rpSortCol] || rpSortCol;
 }
 
 // ── HTML escape ───────────────────────────────────────────────
@@ -76,77 +84,31 @@ function escRp(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// ── Pace bar helpers ──────────────────────────────────────────
-
-function rpPaceClass(paceScore) {
-  if (paceScore == null) return 'rp-neutral';
-  if (paceScore >= -5)  return 'rp-ok';
-  if (paceScore >= -15) return 'rp-warn';
-  return 'rp-behind';
-}
-
-// ── KPI panel (matches mgr-panel on Account Performance) ──────
-
-function rpRenderKpiPanel(t, advisors) {
-  const teamPriorYtd = (typeof accountsData !== 'undefined' && Array.isArray(accountsData))
-    ? accountsData.reduce((s, a) => s + (a.priorYtd || 0), 0) : 0;
-  const yoy = teamPriorYtd > 0 ? (t.ytd_sum - teamPriorYtd) / teamPriorYtd * 100 : null;
-  const yoyStr = yoy !== null
-    ? (yoy >= 0 ? `<span style="color:#86efac">↑ +${yoy.toFixed(1)}%</span>` : `<span style="color:#fca5a5">↓ ${Math.abs(yoy).toFixed(1)}%</span>`) + ' vs prior yr'
-    : '';
-
-  const bizLeft = t.business_days_total - t.business_days_elapsed;
-  const goalPct = t.monthly_goal_sum > 0 ? (t.mtd_sum / t.monthly_goal_sum * 100).toFixed(1) + '%' : '—';
-
-  const paceScores = advisors.map(a => a.pace_score).filter(v => v != null);
-  const avgPace = paceScores.length > 0 ? paceScores.reduce((s, v) => s + v, 0) / paceScores.length : null;
-  const avgPaceStr = avgPace != null ? (avgPace >= 0 ? `+${avgPace.toFixed(1)} pp` : `${avgPace.toFixed(1)} pp`) : '—';
-  const avgPaceColor = avgPace == null ? '' : avgPace >= 0 ? 'color:#86efac' : avgPace >= -10 ? '' : 'color:#fca5a5';
-
-  const onPaceColor = t.on_pace_count === t.advisor_count ? 'color:#86efac' : t.on_pace_count === 0 ? 'color:#fca5a5' : '';
-  const critColor   = t.critical_accts > 0 ? 'color:#fca5a5' : 'color:#86efac';
-
-  const pill = (label, value, sub, valueStyle) => `
-    <div class="mgr-pill">
-      <div class="mgr-pill-label">${label}</div>
-      <div class="mgr-pill-value" style="${valueStyle || ''}">${value}</div>
-      ${sub ? `<div class="mgr-pill-sub">${sub}</div>` : ''}
-    </div>`;
-
-  return `
-    <div class="mgr-panel" style="margin-bottom:14px">
-      <div class="mgr-pill-row">
-        ${pill('Team YTD', rpFmtM(t.ytd_sum), yoyStr || `${t.advisor_count} advisors`)}
-        ${pill('Monthly Goal', rpFmtM(t.monthly_goal_sum), `${goalPct} achieved`)}
-        ${pill('MTD Sales', rpFmtM(t.mtd_sum), `${bizLeft} biz days left`)}
-        ${pill('On Pace', `${t.on_pace_count} / ${t.advisor_count}`, 'advisors on monthly pace', onPaceColor)}
-        ${pill('Critical Accts', String(t.critical_accts), 'across all advisors', critColor)}
-        ${pill('Avg Pace', avgPaceStr, avgPace != null && avgPace < 0 ? `team behind ${Math.abs(avgPace).toFixed(1)} pp` : 'team on pace', avgPaceColor)}
-      </div>
-    </div>`;
-}
-
 // ── Table header ──────────────────────────────────────────────
 
 function rpRenderHeader() {
   const cols = [
-    { key: null,             label: '#',                cls: 'num-ctr'  },
-    { key: 'displayName',    label: 'Advisor'                           },
-    { key: 'ytd',            label: 'YTD Sales',        cls: 'num-ctr'  },
-    { key: 'pct_to_goal',    label: '% to Annual Goal', cls: 'num-ctr'  },
-    { key: 'pct_to_monthly', label: 'Monthly Pace',     cls: 'num-ctr'  },
-    { key: 'mtd',            label: 'MTD Sales',        cls: 'num-ctr'  },
-    { key: 'healthy_count',  label: 'Healthy',          cls: 'num-ctr'  },
-    { key: 'atrisk_count',   label: 'At Risk',          cls: 'num-ctr'  },
-    { key: 'days_idle',      label: 'Idle Days',        cls: 'num-ctr'  },
+    { key: null,               label: '#',                    cls: 'num-ctr',  tip: '' },
+    { key: 'displayName',      label: 'Advisor',              cls: '',         tip: '' },
+    { key: 'ytd',              label: 'YTD Sales',            cls: 'num-ctr',  tip: '' },
+    { key: 'pct_to_goal',      label: '% to Annual Goal',     cls: 'num-ctr',  tip: 'Percentage of annual goal achieved year-to-date' },
+    { key: 'dollar_to_annual', label: '$ to Annual Goal',     cls: 'num-ctr',  tip: 'Remaining dollars needed to hit annual goal' },
+    { key: 'annual_goal',      label: 'Annual Goal',          cls: 'num-ctr',  tip: '' },
+    { key: 'mtd',              label: 'MTD Sales',            cls: 'num-ctr',  tip: '' },
+    { key: 'pct_to_monthly',   label: '% to Monthly Goal',   cls: 'num-ctr',  tip: 'Percentage of monthly goal achieved this month' },
+    { key: 'dollar_to_monthly',label: '$ to Monthly Goal',   cls: 'num-ctr',  tip: 'Remaining dollars needed to hit monthly goal' },
+    { key: 'monthly_goal',     label: 'Monthly Goal',         cls: 'num-ctr',  tip: '' },
+    { key: 'healthy_count',    label: '# Healthy',            cls: 'num-ctr',  tip: '' },
+    { key: 'critical_count',   label: '# Critical',           cls: 'num-ctr',  tip: '' },
   ];
 
   return cols.map(c => {
-    const active = c.key && rpSortCol === c.key;
+    const active   = c.key && rpSortCol === c.key;
     const sortIcon = active ? `<span class="sort-icon">${rpSortDir === -1 ? '▼' : '▲'}</span>` : '';
-    const cls = ['sort-th', c.cls || '', active ? 'sort-active' : ''].filter(Boolean).join(' ');
-    if (!c.key) return `<th class="${cls}">${c.label}</th>`;
-    return `<th class="${cls}" onclick="rpOnHeaderClick('${c.key}')" style="cursor:pointer;user-select:none">
+    const cls      = ['sort-th', c.cls || '', active ? 'sort-active' : ''].filter(Boolean).join(' ');
+    const titleAttr = c.tip ? ` title="${escRp(c.tip)}"` : '';
+    if (!c.key) return `<th class="${cls}"${titleAttr}>${c.label}</th>`;
+    return `<th class="${cls}"${titleAttr} onclick="rpOnHeaderClick('${c.key}')" style="cursor:pointer;user-select:none">
       <div class="th-inner"><span class="th-label">${c.label}</span><span class="th-tail">${sortIcon}</span></div>
     </th>`;
   }).join('');
@@ -155,24 +117,29 @@ function rpRenderHeader() {
 // ── Table rows ────────────────────────────────────────────────
 
 function rpRenderRows(advisors) {
-  const sorted = rpSortedAdvisors(advisors);
-  const pctElapsed = rpData?.team?.pct_elapsed ?? 0;
+  const sorted      = rpSortedAdvisors(advisors);
+  const pctElapsed  = rpData?.team?.pct_elapsed ?? 0;
 
   return sorted.map((a, i) => {
-    const rank = i + 1;
+    const rank      = i + 1;
     const rankStyle = rank === 1 ? 'font-weight:700;color:#b45309' : 'color:#6b7280';
 
-    const goalNum = a.pct_to_goal;
-    const goalOnPace = goalNum != null && goalNum >= pctElapsed;
-    const goalStyle = goalOnPace ? 'color:#059669;font-weight:700' : '';
+    // Annual goal %
+    const annualPctCls  = rpPctClass(a.pct_to_goal, pctElapsed);
+    const annualTip     = a.pct_to_goal != null
+      ? `On pace would be ${pctElapsed.toFixed(1)}% — you are at ${a.pct_to_goal.toFixed(1)}%`
+      : '';
+    const dollarToAnnual = a.annual_goal - a.ytd;
 
-    const paceWidth = Math.min(100, Math.max(0, a.pct_to_monthly ?? 0)).toFixed(1);
-    const paceClass = rpPaceClass(a.pace_score);
-    const paceStr = a.pace_score != null
-      ? (a.pace_score >= 0 ? '+' : '') + a.pace_score.toFixed(1) + 'pp' : '—';
+    // Monthly goal %
+    const monthlyPctCls  = rpPctClass(a.pct_to_monthly, pctElapsed);
+    const monthlyTip     = a.pct_to_monthly != null
+      ? `On pace would be ${pctElapsed.toFixed(1)}% — you are at ${a.pct_to_monthly.toFixed(1)}%`
+      : '';
+    const dollarToMonthly = a.monthly_goal - a.mtd;
 
-    const atRiskStyle = (a.atrisk_count > 0 || a.critical_count > 0) ? 'color:#ea580c;font-weight:600' : '';
-    const idleStr = a.days_idle != null ? a.days_idle + 'd' : '—';
+    const critStyle  = a.critical_count > 0 ? 'color:#dc2626;font-weight:600' : 'color:#6b7280';
+    const healthyStyle = a.healthy_count > 0 ? 'color:#15803d;font-weight:600' : 'color:#9ca3af';
 
     const rowData = JSON.stringify(a).replace(/"/g, '&quot;');
 
@@ -184,19 +151,15 @@ function rpRenderRows(advisors) {
         <div style="font-size:11px;color:#6b7280;font-family:monospace">${escRp(a.rep_prefix)} · ${a.accounts} accts</div>
       </td>
       <td class="num-ctr" style="font-weight:600">${rpFmtM(a.ytd)}</td>
-      <td class="num-ctr" style="${goalStyle}">${rpFmtPct(goalNum)}</td>
-      <td class="num-ctr">
-        <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end">
-          <div style="width:60px;height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;flex-shrink:0">
-            <div style="height:100%;border-radius:3px;width:${paceWidth}%" class="rp-pace-fill ${paceClass}"></div>
-          </div>
-          <span style="font-size:12px;min-width:44px;text-align:right" class="rp-pace-score ${paceClass}">${paceStr}</span>
-        </div>
-      </td>
-      <td class="num-ctr">${rpFmtM(a.mtd)}</td>
-      <td class="num-ctr" style="color:#059669;font-weight:600">${a.healthy_count}</td>
-      <td class="num-ctr" style="${atRiskStyle}">${(a.atrisk_count || 0) + (a.critical_count || 0)}</td>
-      <td class="num-ctr" style="color:#6b7280">${idleStr}</td>
+      <td class="num-ctr ${annualPctCls}" title="${escRp(annualTip)}">${rpFmtPct(a.pct_to_goal)}</td>
+      <td class="num-ctr" style="color:#6b7280">${a.annual_goal > 0 ? rpFmtM(dollarToAnnual) : '—'}</td>
+      <td class="num-ctr" style="color:#9ca3af">${a.annual_goal > 0 ? rpFmtM(a.annual_goal) : '—'}</td>
+      <td class="num-ctr">${a.mtd > 0 ? rpFmtM(a.mtd) : '—'}</td>
+      <td class="num-ctr ${monthlyPctCls}" title="${escRp(monthlyTip)}">${rpFmtPct(a.pct_to_monthly)}</td>
+      <td class="num-ctr" style="color:#6b7280">${a.monthly_goal > 0 ? rpFmtM(dollarToMonthly) : '—'}</td>
+      <td class="num-ctr" style="color:#9ca3af">${a.monthly_goal > 0 ? rpFmtM(a.monthly_goal) : '—'}</td>
+      <td class="num-ctr" style="${healthyStyle}">${a.healthy_count}</td>
+      <td class="num-ctr" style="${critStyle}">${a.critical_count}</td>
     </tr>`;
   }).join('');
 }
@@ -216,9 +179,38 @@ function rpOnHeaderClick(col) {
 function rpRefreshTable() {
   if (!rpData) return;
   const thead = document.querySelector('#rp-scorecard-table thead tr');
-  const tbody = document.getElementById('rp-tbody');
+  const tbody  = document.getElementById('rp-tbody');
   if (thead) thead.innerHTML = rpRenderHeader();
-  if (tbody) tbody.innerHTML = rpRenderRows(rpData.advisors);
+  if (tbody)  tbody.innerHTML = rpRenderRows(rpData.advisors);
+}
+
+// ── Skeleton loader ───────────────────────────────────────────
+
+function rpRenderSkeleton() {
+  const rows = Array.from({ length: 8 }, (_, i) => `
+    <tr>
+      <td><div class="rp-skeleton" style="height:14px;width:18px"></div></td>
+      <td><div class="rp-skeleton" style="height:14px;width:${100 + (i % 3) * 30}px;margin-bottom:4px"></div>
+          <div class="rp-skeleton" style="height:10px;width:70px"></div></td>
+      ${Array.from({length:10},(_,j)=>`<td class="num-ctr"><div class="rp-skeleton" style="height:14px;width:${40+j%3*12}px;margin:0 auto"></div></td>`).join('')}
+    </tr>`).join('');
+
+  return `
+    <div style="padding:16px 0 0">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:0 0 14px">
+        <div>
+          <div class="rp-skeleton" style="height:20px;width:280px;margin-bottom:6px"></div>
+          <div class="rp-skeleton" style="height:13px;width:200px"></div>
+        </div>
+        <div class="rp-skeleton" style="height:30px;width:72px;border-radius:6px"></div>
+      </div>
+      <div class="inv-wrap" style="overflow-x:auto">
+        <table class="data-table" id="rp-scorecard-table">
+          <thead><tr>${rpRenderHeader()}</tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
 }
 
 // ── Full page render ──────────────────────────────────────────
@@ -230,10 +222,9 @@ function rpRenderFull() {
 
   container.innerHTML = `
     <div style="padding:16px 0 0">
-      ${rpRenderKpiPanel(t, rpData.advisors)}
-      <div class="tier-filter-bar" style="margin-bottom:8px">
-        <span style="font-size:13px;font-weight:600;color:#1a2332">${rpMonthLabel()} — Advisor Standings</span>
-        <span style="font-size:12px;color:#6b7280;margin-left:8px">Day ${t.business_days_elapsed} of ${t.business_days_total} &middot; ${t.pct_elapsed}% elapsed</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:0 0 14px">
+        <div style="font-size:22px;font-weight:800;color:#1a2332">${rpMonthLabel()}</div>
+        <button onclick="rpForceRefresh()" class="btn btn-secondary" style="font-size:13px;padding:6px 16px">↺ Refresh</button>
       </div>
       <div class="inv-wrap" style="overflow-x:auto">
         <table class="data-table" id="rp-scorecard-table">
@@ -242,6 +233,11 @@ function rpRenderFull() {
         </table>
       </div>
     </div>`;
+}
+
+async function rpForceRefresh() {
+  rpData = null;
+  await renderRepPerformance();
 }
 
 // ── Rep drill-down ────────────────────────────────────────────
@@ -278,9 +274,9 @@ function rpRenderDrilldown() {
   const tierCounts = { Healthy: 0, Attention: 0, AtRisk: 0, Critical: 0 };
   accounts.forEach(acc => { tierCounts[acc.tier] = (tierCounts[acc.tier] || 0) + 1; });
 
-  const pctGoalStr = a.pct_to_goal != null ? a.pct_to_goal.toFixed(1) + '%' : '—';
+  const pctGoalStr = a.pct_to_goal    != null ? a.pct_to_goal.toFixed(1)    + '%' : '—';
   const pctMoStr   = a.pct_to_monthly != null ? a.pct_to_monthly.toFixed(1) + '%' : '—';
-  const goalOnPace = a.pct_to_goal != null && a.pct_to_goal >= pctElapsed;
+  const goalOnPace = a.pct_to_goal    != null && a.pct_to_goal    >= pctElapsed;
   const moOnPace   = a.pct_to_monthly != null && a.pct_to_monthly >= pctElapsed;
 
   const drillHeaders = [
@@ -297,8 +293,8 @@ function rpRenderDrilldown() {
 
   const drillThHtml = drillHeaders.map(h => {
     const active = rpDrillSortCol === h.col;
-    const icon = active ? (rpDrillSortDir === -1 ? ' ▼' : ' ▲') : '';
-    const cls = ['sort-th', h.cls, active ? 'sort-active' : ''].filter(Boolean).join(' ');
+    const icon   = active ? (rpDrillSortDir === -1 ? ' ▼' : ' ▲') : '';
+    const cls    = ['sort-th', h.cls, active ? 'sort-active' : ''].filter(Boolean).join(' ');
     return `<th class="${cls}" data-rp-drill-col="${h.col}" onclick="rpDrillSort('${h.col}')" style="cursor:pointer;user-select:none">
       <div class="th-inner"><span class="th-label">${h.label}</span><span class="th-tail"><span class="sort-icon">${icon}</span></span></div>
     </th>`;
@@ -338,7 +334,6 @@ function rpRenderDrilldown() {
         <div style="display:flex;flex-direction:column;gap:8px;padding-top:12px">
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#6b7280;margin-bottom:4px">Account Health Breakdown</div>
           ${['Healthy','Attention','AtRisk','Critical'].map(tier => {
-            const colors = { Healthy:'#059669', Attention:'#eab308', AtRisk:'#ea580c', Critical:'#dc2626' };
             return `<div style="display:flex;align-items:center;gap:10px;font-size:13px">
               <span class="tier-badge tier-${tier.toLowerCase()}" style="min-width:72px;text-align:center">${tier.replace('AtRisk','At Risk')}</span>
               <span style="font-weight:600;color:#1a2332">${tierCounts[tier]}</span>
@@ -381,8 +376,8 @@ function rpDrillRowsHtml(rows) {
   if (!rows.length) return `<tr><td colspan="9" style="padding:24px;text-align:center;color:#9ca3af">No accounts found.</td></tr>`;
   const tierBg = { Critical:'background:#fff5f5', AtRisk:'background:#fff8f0' };
   return rows.map(a => {
-    const rowBg  = tierBg[a.tier] || '';
-    const tier   = a.tier || 'Healthy';
+    const rowBg   = tierBg[a.tier] || '';
+    const tier    = a.tier || 'Healthy';
     const tierLbl = tier.replace('AtRisk','At Risk');
     const daysCls = a.daysSinceOrder >= 60 ? 'vel-down' : a.daysSinceOrder >= 30 ? 'vel-ss' : '';
     const pctAnn  = a.annualGoal > 0 ? (a.pctToAnnualGoal * 100).toFixed(1) + '%' : '—';
@@ -413,7 +408,7 @@ function rpDrillSort(col) {
   }
   if (!rpDrillAdvisor) return;
   const sorted = rpDrillSortedAccounts(rpGetRepAccounts(rpDrillAdvisor.rep_prefix));
-  const tbody = document.getElementById('rp-drill-tbody');
+  const tbody  = document.getElementById('rp-drill-tbody');
   if (tbody) tbody.innerHTML = rpDrillRowsHtml(sorted);
   document.querySelectorAll('#rp-drill-table th[data-rp-drill-col]').forEach(th => {
     const isActive = th.dataset.rpDrillCol === rpDrillSortCol;
@@ -458,13 +453,11 @@ async function renderRepPerformance() {
   const container = document.getElementById('tab-rp');
   if (!container) return;
 
-  // If drill-down is active, just re-render it
   if (rpDrillAdvisor) { rpRenderDrilldown(); return; }
 
-  // If data already loaded, render immediately
   if (rpData) { rpRenderFull(); return; }
 
-  container.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;min-height:300px;color:#6b7280;font-size:14px">Loading scorecard…</div>`;
+  container.innerHTML = rpRenderSkeleton();
 
   try {
     const r = await fetch('/proxy/rep-scorecard');

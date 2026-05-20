@@ -142,10 +142,10 @@ function renderOrderDetail(custNo, cust, order) {
             </div>
           </div>
           <div class="od-no-print" style="display:flex;gap:7px;margin-top:12px">
-            <button onclick="orderDetailCopy()" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.22);color:#fff;border-radius:6px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.15s"
-              onmouseover="this.style.background='rgba(255,255,255,0.22)'" onmouseout="this.style.background='rgba(255,255,255,0.12)'">Copy</button>
+            <button onclick="orderDetailExportCsv()" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.22);color:#fff;border-radius:6px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.15s"
+              onmouseover="this.style.background='rgba(255,255,255,0.22)'" onmouseout="this.style.background='rgba(255,255,255,0.12)'">Export CSV</button>
             <button onclick="orderDetailPrint()" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.22);color:#fff;border-radius:6px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.15s"
-              onmouseover="this.style.background='rgba(255,255,255,0.22)'" onmouseout="this.style.background='rgba(255,255,255,0.12)'">Print / PDF</button>
+              onmouseover="this.style.background='rgba(255,255,255,0.22)'" onmouseout="this.style.background='rgba(255,255,255,0.12)'">Print</button>
           </div>
         </div>
 
@@ -153,7 +153,7 @@ function renderOrderDetail(custNo, cust, order) {
         <div id="od-kpi-grid" style="flex-shrink:0;display:flex;flex-direction:column;gap:8px;justify-content:center">
           <div style="display:grid;grid-template-columns:repeat(3,minmax(120px,170px));gap:8px">
             ${kpiPill('Order Total', fmt$(totExt), 'post-discount')}
-            ${kpiPill('Margin', fmt$(margin), marginPct.toFixed(1) + '% of order')}
+            ${kpiPill('Profit', fmt$(margin), marginPct.toFixed(1) + '% of order')}
             ${kpiPill('vs Prior Order', vsPriorValue, vsPriorSub)}
           </div>
           <div style="display:grid;grid-template-columns:repeat(3,minmax(120px,170px));gap:8px">
@@ -165,7 +165,7 @@ function renderOrderDetail(custNo, cust, order) {
 
         <!-- Donut charts — side-by-side, fixed canvas height so flex-grow can't inflate them -->
         ${lineCount > 0 ? `
-        <div style="flex:1;display:flex;gap:12px;padding-left:16px;align-self:stretch;align-items:stretch;min-width:0">
+        <div class="od-no-print" style="flex:1;display:flex;gap:12px;padding-left:16px;align-self:stretch;align-items:stretch;min-width:0">
           <div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-width:0">
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#fff;margin-bottom:6px;flex-shrink:0">Best-Seller Mix</div>
             <div id="od-bs-wrap" style="position:relative;height:160px;flex:none"><canvas id="od-bs-chart"></canvas></div>
@@ -311,24 +311,27 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
     `<span style="background:${bg};color:${color};padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap">${label}</span>`;
 
   const tableRows = visibleLines.map(l => {
-    const lineMargin = (l.unitPrice - l.unitCost) * l.qty;
+    const lineMargin    = (l.unitPrice - l.unitCost) * l.qty;
+    const lineMarginPct = l.extPrice > 0 ? (lineMargin / l.extPrice * 100) : null;
     const tags = [];
     if (l.isBestSeller) tags.push(tagPill('★ Best',   '#fde68a', '#92400e'));
     if (l.isRepeat)     tags.push(tagPill('↻ Repeat', '#99f6e4', '#0f766e'));
     else if (l.isRepeat !== undefined) tags.push(tagPill('+ New', '#bfdbfe', '#1e40af'));
+    const marginColor = lineMargin > 0 ? '#059669' : lineMargin < 0 ? '#dc2626' : '#9ca3af';
     return `<tr>
-      <td style="padding:8px 12px;font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80;white-space:nowrap;text-align:center">${l.itemNo}</td>
-      <td style="padding:8px 12px;font-size:12px;color:#6b7280;white-space:nowrap;text-align:center">${l.category || '—'}</td>
-      <td style="padding:8px 12px;font-size:13px">${l.description || '—'}</td>
-      <td style="padding:8px 12px;min-width:100px;text-align:center">
+      <td style="padding:8px 12px;min-width:80px;text-align:center">
         <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center">${tags.join('') || ''}</div>
       </td>
+      <td style="padding:8px 12px;font-size:12px;color:#6b7280;white-space:nowrap;text-align:center">${l.category || '—'}</td>
+      <td style="padding:8px 12px;font-size:13px">${l.description || '—'}</td>
+      <td style="padding:8px 12px;font-family:monospace;font-size:12px;font-weight:600;color:#3d5a80;white-space:nowrap;text-align:center">${l.itemNo}</td>
       <td class="num-ctr" style="padding:8px 12px;font-size:13px">${l.qty}</td>
       <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:#6b7280">${l.unitPrice > 0 ? f(l.unitPrice) : '—'}</td>
       <td class="num-ctr" style="padding:8px 12px;font-size:13px;font-weight:600">${l.extPrice > 0 ? f(l.extPrice) : '—'}</td>
-      <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:${lineMargin > 0 ? '#059669' : lineMargin < 0 ? '#dc2626' : '#9ca3af'}">${l.unitCost > 0 ? f(lineMargin) : '—'}</td>
+      <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:${marginColor}">${l.unitCost > 0 ? f(lineMargin) : '—'}</td>
+      <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:${marginColor}">${lineMarginPct !== null && l.unitCost > 0 ? lineMarginPct.toFixed(1) + '%' : '—'}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="8" style="padding:24px;color:#9ca3af;text-align:center">No matching items.</td></tr>';
+  }).join('') || '<tr><td colspan="9" style="padding:24px;color:#9ca3af;text-align:center">No matching items.</td></tr>';
 
   // Sortable header helper — shows active column + direction indicator
   const thStyle = 'cursor:pointer;user-select:none;white-space:nowrap;';
@@ -342,17 +345,21 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
   const th = (col, label, extraClass = '') =>
     `<th class="${extraClass}" style="${thStyle}" onclick="odSortBy('${col}')" ${thHover}>${label}${arrow(col)}</th>`;
 
+  const totMarginPct = totExt > 0 ? (totMargin / totExt * 100) : null;
+  const totMarginColor = totMargin >= 0 ? '#059669' : '#dc2626';
+
   return `<table class="data-table">
     <thead style="position:sticky;top:0;z-index:2;background:#fff">
       <tr>
-        ${th('item', 'Item #',   'num-ctr')}
+        <th style="text-align:center">Tags</th>
         ${th('cat',  'Category', 'num-ctr')}
         ${th('desc', 'Description')}
-        <th style="text-align:center">Tags</th>
+        ${th('item', 'Item #',   'num-ctr')}
         ${th('qty',    'Qty',      'num-ctr')}
         ${th('unit',   'Unit $',   'num-ctr')}
         ${th('ext',    'Ext $',    'num-ctr')}
         ${th('margin', 'Margin $', 'num-ctr')}
+        ${th('marginPct', 'Margin %', 'num-ctr')}
       </tr>
     </thead>
     <tbody>${tableRows}</tbody>
@@ -362,7 +369,8 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
         <td class="num-ctr" style="${stickyTd};padding:10px 12px">${totQty}</td>
         <td style="${stickyTd};padding:10px 12px"></td>
         <td class="num-ctr" style="${stickyTd};padding:10px 12px">${f(totExt)}</td>
-        <td class="num-ctr" style="${stickyTd};padding:10px 12px;color:${totMargin >= 0 ? '#059669' : '#dc2626'}">${totMargin !== 0 ? f(totMargin) : '—'}</td>
+        <td class="num-ctr" style="${stickyTd};padding:10px 12px;color:${totMarginColor}">${totMargin !== 0 ? f(totMargin) : '—'}</td>
+        <td class="num-ctr" style="${stickyTd};padding:10px 12px;color:${totMarginColor}">${totMarginPct !== null ? totMarginPct.toFixed(1) + '%' : '—'}</td>
       </tr>
     </tfoot>
   </table>`;
@@ -425,9 +433,14 @@ function odApplyFilter() {
       case 'unit':   return sign * (a.unitPrice - b.unitPrice);
       case 'ext':    return sign * (a.extPrice - b.extPrice);
       case 'margin': {
-        const mA = a.unitCost > 0 ? (a.unitPrice - a.unitCost) / a.unitPrice : 0;
-        const mB = b.unitCost > 0 ? (b.unitPrice - b.unitCost) / b.unitPrice : 0;
+        const mA = (a.unitPrice - a.unitCost) * a.qty;
+        const mB = (b.unitPrice - b.unitCost) * b.qty;
         return sign * (mA - mB);
+      }
+      case 'marginPct': {
+        const pA = a.extPrice > 0 ? (a.unitPrice - a.unitCost) * a.qty / a.extPrice : 0;
+        const pB = b.extPrice > 0 ? (b.unitPrice - b.unitCost) * b.qty / b.extPrice : 0;
+        return sign * (pA - pB);
       }
       default: return 0;
     }
@@ -460,27 +473,60 @@ function orderDetailToast(msg) {
   t._hide = setTimeout(() => { t.style.opacity = '0'; }, 2400);
 }
 
-function orderDetailCopy() {
+function orderDetailExportCsv() {
   const panel = document.getElementById('customer-account-panel');
   const d = panel && panel._orderData;
-  if (!d) return;
-  const lines = (d.lines || []).map(l => {
-    const m = (l.unitPrice - l.unitCost) * l.qty;
-    return `${l.itemNo}\t${l.description}\t${l.qty}\t${l.unitPrice.toFixed(2)}\t${l.extPrice.toFixed(2)}\t${m.toFixed(2)}`;
-  }).join('\n');
-  const text = [
-    `Order #${d.ticketNo}`,
-    `Date: ${d.date}`,
-    `Customer: ${d.custName}`,
-    `Rep: ${d.rep}`,
-    `Total: $${d.total.toFixed(2)}`,
-    `Margin: $${d.margin.toFixed(2)}`,
-    '',
-    'Item #\tDescription\tQty\tUnit $\tExt $\tMargin $',
-    lines,
-  ].join('\n');
-  navigator.clipboard.writeText(text).then(
-    () => orderDetailToast('Copied to clipboard'),
-    () => orderDetailToast('Copy failed — try again')
-  );
+  if (!d || typeof XLSX === 'undefined') return;
+
+  const headers = ['Category', 'Description', 'Item #', 'Qty', 'Unit $', 'Ext $', 'Profit $', 'Profit %'];
+
+  const dataRows = (d.lines || []).map(l => {
+    const profit    = (l.unitPrice - l.unitCost) * l.qty;
+    const profitPct = l.extPrice > 0 ? +(profit / l.extPrice * 100).toFixed(1) : null;
+    return [
+      l.category    || '',
+      l.description || '',
+      l.itemNo      || '',
+      l.qty         || 0,
+      l.unitPrice   > 0 ? +l.unitPrice.toFixed(2) : '',
+      l.extPrice    > 0 ? +l.extPrice.toFixed(2)  : '',
+      l.unitCost    > 0 ? +profit.toFixed(2)       : '',
+      profitPct     !== null && l.unitCost > 0 ? profitPct / 100 : '',
+    ];
+  });
+
+  const XS = typeof XLSXStyle !== 'undefined' ? XLSXStyle : XLSX;
+
+  const ws = XS.utils.aoa_to_sheet([headers, ...dataRows]);
+
+  // Header row style — bold, light grey fill
+  const headerStyle = {
+    font:      { bold: true },
+    fill:      { fgColor: { rgb: 'D0D0D0' }, patternType: 'solid' },
+    alignment: { horizontal: 'center' },
+  };
+  headers.forEach((_, ci) => {
+    const addr = XS.utils.encode_cell({ r: 0, c: ci });
+    if (ws[addr]) ws[addr].s = headerStyle;
+  });
+
+  // Format Profit % column (col index 7) as percentage
+  dataRows.forEach((_, ri) => {
+    const addr = XS.utils.encode_cell({ r: ri + 1, c: 7 });
+    if (ws[addr] && ws[addr].v !== '') ws[addr].z = '0.0%';
+  });
+
+  // Auto-fit column widths based on max character length
+  const allRows = [headers, ...dataRows];
+  ws['!cols'] = headers.map((_, ci) => {
+    const maxLen = allRows.reduce((max, row) => {
+      const v = row[ci] == null ? '' : String(row[ci]);
+      return Math.max(max, v.length);
+    }, 10);
+    return { wch: Math.min(maxLen + 2, 60) };
+  });
+
+  const wb = XS.utils.book_new();
+  XS.utils.book_append_sheet(wb, ws, `Order ${d.ticketNo}`);
+  XS.writeFile(wb, `Order-${d.ticketNo}.xlsx`);
 }

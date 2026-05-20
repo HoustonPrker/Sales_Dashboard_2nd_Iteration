@@ -247,6 +247,7 @@ async function buildAccountsData(repParam, repPrefix, cacheKey) {
       pyFullPromise,
     ]);
     console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY / ${pyMonthTickets.length} pyMonth tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
+    if (customers.length) console.log(`  [phone-debug] sample customer keys:`, Object.keys(customers[0]).filter(k => /phone|mobile|fax|alt/i.test(k)));
 
     // Keep customers with a sale in the last 24 months — excludes truly dormant/closed accounts
     const cutoff = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -439,6 +440,7 @@ async function buildAccountsData(repParam, repPrefix, cacheKey) {
         termsCode:      (c.termsCode || '').trim(),
         email:          (c.email1 || '').trim(),
         phone:          (c.phone1 || '').trim(),
+        phone2:         (c.phone1a || '').trim(),
         discount:       +(c.discountPercent || 0),
         ytdSales:       +ytdSales.toFixed(2),
         mtdSales:       +mtdSales.toFixed(2),
@@ -512,7 +514,7 @@ router.get('/accounts', enforceRepScope, async (req, res) => {
   const cached  = accountsCache[cacheKey];
   const isStale = !cached || Date.now() - cached.ts > CACHE_TTL;
 
-  if (cached) {
+  if (cached && cached.data.length > 0) {
     if (isStale) triggerRefresh(repParam, repPrefix, cacheKey);  // background
     return res.json(cached.data);  // serve immediately
   }
@@ -653,6 +655,7 @@ router.get('/customer/:custNo', async (req, res) => {
     const r    = await doFetch('GET', `/api/v1/Customers/${encodeURIComponent(key)}?includeCustomFields=true&compact=true`);
     const body = await r.json();
     const d    = body.data || body;
+    if (d) console.log(`[customer-detail] ${key} phone keys:`, Object.keys(d).filter(k => /phone|mobile/i.test(k)));
     if (d && d.USER_BEST_PRICE_COD_CUST !== undefined) {
       d.best_price_code = d.USER_BEST_PRICE_COD_CUST || null;
     }
@@ -941,17 +944,20 @@ router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (r
     });
 
     // Only advisor-role users compete on the leaderboard — managers/admins with rep_prefix are excluded
-    const advisorPrefixes = new Set(
-      listUsers()
-        .filter(u => u.role === 'advisor' && u.rep_prefix && u.active)
-        .map(u => u.rep_prefix.toUpperCase())
-    );
+    const advisorUsers = listUsers().filter(u => u.role === 'advisor' && u.rep_prefix && u.active);
+    const advisorPrefixes = new Set(advisorUsers.map(u => u.rep_prefix.toUpperCase()));
+    // Build prefix → displayName from users.json (authoritative source for human-readable names)
+    const prefixDisplayName = {};
+    advisorUsers.forEach(u => { prefixDisplayName[u.rep_prefix.toUpperCase()] = u.displayName; });
+
     const repMap = {};
     activeReps.forEach(({ id }) => {
       const prefix = id.toUpperCase().replace(/-.*$/, ''); // strip suffix like -NEW, -ACT
       if (!advisorPrefixes.has(prefix) && !advisorPrefixes.has(id.toUpperCase())) return;
-      const raw  = nameMap[id.toUpperCase()] || id;
-      repMap[id] = raw.replace(/\s*[-–]\s*(ACTIVE|ACT)$/i, '').trim() || id;
+      // Prefer users.json displayName; fall back to NCR name if available, then raw ID
+      const ncrRaw  = nameMap[id.toUpperCase()];
+      const ncrName = ncrRaw ? ncrRaw.replace(/\s*[-–]\s*(ACTIVE|ACT)$/i, '').trim() : null;
+      repMap[id] = prefixDisplayName[prefix] || ncrName || prefix;
     });
 
     // 2. Build per-custNo sales maps from all windows
@@ -1103,13 +1109,15 @@ router.get('/leaderboard', requireRoles('advisor', 'manager', 'admin'), async (r
         .filter(r => r._cmGoal === null || r._cmGoal <= 0)
         .sort((a, b) => (b.pctToGoal || 0) - (a.pctToGoal || 0)),
     ].map((r, i) => ({
-      standingsRank: i + 1,
-      repId:         r.repId,
-      repName:       r.repName,
-      pctToGoal:     r.pctToGoal,
-      paceScore:     r.paceScore,
-      daysIdle:      r.daysIdle,
-      healthyCount:  r.healthyCount,
+      standingsRank:  i + 1,
+      repId:          r.repId,
+      repName:        r.repName,
+      pctToGoal:      r.pctToGoal,
+      paceScore:      r.paceScore,
+      daysIdle:       r.daysIdle,
+      accountCount:   r._accountCount,
+      healthyCount:   r.healthyCount,
+      pctHealthy:     r._accountCount > 0 ? Math.round(r.healthyCount / r._accountCount * 100) : null,
     }));
 
     const payload = {

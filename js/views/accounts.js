@@ -1218,8 +1218,16 @@ function renderOverviewKpis() {
   if (!el || !acctOverviewData) return;
   const d = acctOverviewData;
 
-  const totalAccounts     = (accountsData || []).length;
-  const activeAccounts    = d.monthly.activeAccounts;      // 180-day unique CustNos
+  const totalAccounts = (accountsData || []).length;
+  // For ALL admin view the server skips the large ticket-history queries and returns -1
+  // as a sentinel. Derive these KPIs from accountsData which is already fully loaded.
+  const isAllView = (typeof currentRep !== 'undefined') && currentRep === 'ALL';
+  const activeAccounts = (isAllView || d.monthly.activeAccounts < 0)
+    ? (accountsData || []).filter(a => a.daysSinceOrder >= 0 && a.daysSinceOrder < 180).length
+    : d.monthly.activeAccounts;
+  const mtdSales = (isAllView && d.monthly.mtd === 0)
+    ? (accountsData || []).reduce((s, a) => s + (a.mtdSales || 0), 0)
+    : d.monthly.mtd;
   const mtdActiveAccounts = d.monthly.mtdActiveAccounts ?? 0;
 
   const runRatePct   = (d.yearRunRate * 100).toFixed(1);
@@ -1239,13 +1247,13 @@ function renderOverviewKpis() {
   const totalAnnualTarget = (accountsData || []).reduce((s, a) => s + (a.annualGoal || 0), 0);
   const annualPctRatio  = totalAnnualTarget > 0 ? totalYtd / totalAnnualTarget : 0;
   const annualPct       = (annualPctRatio * 100).toFixed(1);
-  const mtdRatio     = totalMonthGoal > 0 ? d.monthly.mtd / totalMonthGoal : 0;
+  const mtdRatio     = totalMonthGoal > 0 ? mtdSales / totalMonthGoal : 0;
   const mtdPct       = (mtdRatio * 100).toFixed(1);
 
   // Daily Needed — uses per-account monthGoal (same source as the Monthly Goal pill) and
   // remainingBusinessDays from rep-overview (already includes today after server fix).
   const remainingBD  = d.monthly.remainingBusinessDays;
-  const gapToGoal    = totalMonthGoal - d.monthly.mtd;
+  const gapToGoal    = totalMonthGoal - mtdSales;
   const dailyNeeded  = remainingBD > 0 && gapToGoal > 0 ? gapToGoal / remainingBD : 0;
   const dailyColor   = dailyNeeded > 0 ? '#d97706' : '#059669';
 
@@ -1311,7 +1319,7 @@ function renderOverviewKpis() {
             ${pill('% to Annual Target', `${annualPct}%`, fmt$(totalYtd) + ' YTD', '', `<strong>% to Annual Target:</strong> YTD Sales ÷ Annual Goal<br><strong>YTD Sales:</strong> ${fmt$(totalYtd)}<br><strong>Annual Goal:</strong> ${fmt$(totalAnnualTarget)}`)}
             ${pill('YTD Sales', fmt$(totalYtd), 'current year to date')}
             ${pill('% to Monthly Target', `${mtdPct}%`, 'of monthly goal')}
-            ${pill('MTD Sales', fmt$(d.monthly.mtd), `${d.monthly.remainingBusinessDays} biz days left`)}
+            ${pill('MTD Sales', fmt$(mtdSales), `${d.monthly.remainingBusinessDays} biz days left`)}
             ${pill('Avg Order',
               `${fmt$(d.avg.ticketCurrent)}<br>${d.avg.linesCurrent.toFixed(1)} lines`,
               '',

@@ -83,6 +83,45 @@ async function loadCustomerAccount(custNo) {
       window.caLastOrders = orders; // update so showMonthOrders has the real data
       renderCACharts(catData, orders);
       startAIPitch(cust, catData, mtd);
+
+      // Patch Monthly Goal / % to Goal KPIs — these depend on orders and were blank on first render
+      const now2 = new Date();
+      const yr2  = now2.getFullYear();
+      const mm2  = String(now2.getMonth() + 1).padStart(2, '0');
+      const pyMonthStart2 = `${yr2 - 1}-${mm2}-01`;
+      const pyMonthEnd2   = new Date(yr2 - 1, parseInt(mm2, 10), 0).toISOString().slice(0, 10);
+      const monthGoal2    = orders.filter(o => { const d = (o.date || '').slice(0, 10); return d >= pyMonthStart2 && d <= pyMonthEnd2; })
+                                  .reduce((s, o) => s + (o.amount || 0), 0);
+      const mtdPctOfGoal2 = monthGoal2 > 0 ? (mtd.total / monthGoal2 * 100).toFixed(1) : null;
+      const elGoal  = document.getElementById('ca-kpi-month-goal');
+      const elPct   = document.getElementById('ca-kpi-pct-goal');
+      const elSub   = document.getElementById('ca-kpi-mtd-sub');
+      if (elGoal) elGoal.textContent = monthGoal2 > 0 ? fmt$(monthGoal2) : '—';
+      if (elPct)  elPct.textContent  = mtdPctOfGoal2 !== null ? mtdPctOfGoal2 + '%' : '—';
+      if (elSub)  elSub.textContent  = monthGoal2 > 0 ? 'Goal: ' + fmt$(monthGoal2) : (mtd?.orderDays || 0) + ' order days';
+
+      // Patch Orders/Frequency/Cadence tooltip — also order-dependent
+      const oneYearAgo2  = new Date(now2); oneYearAgo2.setFullYear(now2.getFullYear() - 1);
+      const orders12mo2  = orders.filter(o => o.date && new Date(o.date) >= oneYearAgo2).length;
+      const orderDates2  = [...new Set(orders.map(o => o.date).filter(Boolean))].sort();
+      let avgCadence2 = null;
+      if (orderDates2.length >= 2) {
+        const span2 = (new Date(orderDates2[orderDates2.length - 1]) - new Date(orderDates2[0])) / 86400000;
+        avgCadence2 = span2 / (orderDates2.length - 1);
+      }
+      const cadenceLabel2 = avgCadence2 === null ? null
+        : avgCadence2 <= 7  ? 'Weekly'
+        : avgCadence2 <= 16 ? 'Bi-weekly'
+        : avgCadence2 <= 35 ? 'Monthly'
+        : avgCadence2 <= 50 ? 'Every 6 weeks'
+        : avgCadence2 <= 75 ? 'Every 2 months'
+        : 'Quarterly';
+      const el12mo    = document.getElementById('ca-kpi-orders12mo');
+      const elFreq    = document.getElementById('ca-kpi-avg-freq');
+      const elCadence = document.getElementById('ca-kpi-cadence');
+      if (el12mo)    el12mo.textContent    = orders12mo2;
+      if (elFreq)    elFreq.textContent    = avgCadence2 !== null ? '(~every ' + Math.round(avgCadence2) + ' days)' : '—';
+      if (elCadence) elCadence.textContent = cadenceLabel2 || '—';
     });
 
   } catch (e) {
@@ -201,6 +240,7 @@ function renderCA(cust, catData, mtd, orders) {
   const salesRep  = cust.salesRep || '—';
   const segment   = cust.categoryCode || '—';
   const phone       = cust.phone1 || cust.phone || cust.phoneNumber || null;
+  const phone2      = cust.phone2 || null;
   const email       = cust.email1 || cust.email || cust.emailAddress || null;
   const phoneRole   = cust.contc_title_1 || cust.phone_label || null;
   const rawDiscount = cust.best_price_code || cust.USER_BEST_PRICE_COD_CUST || null;
@@ -375,6 +415,10 @@ function renderCA(cust, catData, mtd, orders) {
           <span>${phone}</span>
           ${phoneRole ? `<span class="cp-meta">${phoneRole}</span>` : ''}
         </a>` : ''}
+        ${phone2 ? `<a href="tel:${phone2.replace(/\D/g,'')}" class="contact-pill" title="${phone2}">
+          <svg class="cp-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.4 2 2 0 0 1 3.6 1.22h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.03z"/></svg>
+          <span>${phone2}</span>
+        </a>` : ''}
         ${email ? `<a href="mailto:${email}" class="contact-pill" title="${email}">
           <svg class="cp-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
           <span>${email}</span>
@@ -436,14 +480,14 @@ function renderCA(cust, catData, mtd, orders) {
                   ${fmt$(mtdTotal)}
                   <span class="kpi-info-icon">i
                     <span class="kpi-tooltip-box">
-                      <strong>Monthly Goal:</strong> ${monthGoal > 0 ? fmt$(monthGoal) : '—'}<br>
-                      <strong>% to Goal:</strong> ${mtdPctOfGoal !== null ? mtdPctOfGoal + '%' : '—'}<br>
+                      <strong>Monthly Goal:</strong> <span id="ca-kpi-month-goal">${monthGoal > 0 ? fmt$(monthGoal) : '—'}</span><br>
+                      <strong>% to Goal:</strong> <span id="ca-kpi-pct-goal">${mtdPctOfGoal !== null ? mtdPctOfGoal + '%' : '—'}</span><br>
                       <strong>Run Rate:</strong> ${monthRunRatePct}%
                     </span>
                   </span>
                 </span>
               </div>
-              <div class="mgr-pill-sub">${monthGoal > 0 ? 'Goal: ' + fmt$(monthGoal) : (mtd?.orderDays || 0) + ' order days'}</div>
+              <div class="mgr-pill-sub" id="ca-kpi-mtd-sub">${monthGoal > 0 ? 'Goal: ' + fmt$(monthGoal) : (mtd?.orderDays || 0) + ' order days'}</div>
             </div>
           </div>
 
@@ -489,9 +533,9 @@ function renderCA(cust, catData, mtd, orders) {
                   ${lastDate || '—'}
                   <span class="kpi-info-icon">i
                     <span class="kpi-tooltip-box">
-                      <strong>Orders (last 12 mo):</strong> ${orders12mo}<br>
-                      <strong>Avg. Frequency:</strong> ${avgCadence !== null ? '(~every ' + Math.round(avgCadence) + ' days)' : '—'}<br>
-                      <strong>Cadence:</strong> ${cadenceLabel || '—'}
+                      <strong>Orders (last 12 mo):</strong> <span id="ca-kpi-orders12mo">${orders12mo}</span><br>
+                      <strong>Avg. Frequency:</strong> <span id="ca-kpi-avg-freq">${avgCadence !== null ? '(~every ' + Math.round(avgCadence) + ' days)' : '—'}</span><br>
+                      <strong>Cadence:</strong> <span id="ca-kpi-cadence">${cadenceLabel || '—'}</span>
                     </span>
                   </span>
                 </span>
@@ -976,10 +1020,10 @@ function buildCatTable(catData) {
     }
   });
 
-  const th = (key, label, cls = '', style = '') => {
+  const th = (key, label, cls = '', style = '', tip = '') => {
     const active = caCatSort.col === key;
     const icon   = active ? (caCatSort.dir === 'asc' ? '▲' : '▼') : '⇅';
-    return `<th class="${cls} sort-th${active ? ' sort-active' : ''}" onclick="caSortCat('${key}')"${style ? ` style="${style}"` : ''}>${label}<span class="sort-icon">${icon}</span></th>`;
+    return `<th class="${cls} sort-th${active ? ' sort-active' : ''}" onclick="caSortCat('${key}')"${style ? ` style="${style}"` : ''}${tip ? ` title="${tip}"` : ''}>${label}<span class="sort-icon">${icon}</span></th>`;
   };
 
   // Totals row
@@ -1042,7 +1086,7 @@ function buildCatTable(catData) {
             ${th('currentYtdAmt', 'Current YTD $', 'num-ctr')}
             ${th('currentQty',    'Curr Unq Qty',  'num-ctr')}
             ${th('priorYtdAmt',   'Prior YTD $',   'num-ctr')}
-            ${th('priorQty',      'Prior Unq Qty', 'num-ctr')}
+            ${th('priorQty',      'Prior Unq Qty', 'num-ctr', 'cursor:help', 'Prior year to date (Jan 1 – same date last year), not the full prior calendar year')}
             ${th('dollarChange',  '$ Change',       'num-ctr')}
           </tr></thead>
           <tbody>${rows}</tbody>
@@ -1181,7 +1225,7 @@ function printCatTable() {
             <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Current YTD $</th>
             <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Curr Unq Qty</th>
             <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Prior YTD $</th>
-            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Prior Unq Qty</th>
+            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb;cursor:help" title="Prior year to date (Jan 1 – same date last year), not the full prior calendar year">Prior Unq Qty</th>
             <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">$ Change</th>
           </tr>
         </thead>
@@ -1364,7 +1408,6 @@ function renderItemDrill() {
         <button onclick="caDrillSwapTab('best')" style="${btnBest}">Best Sellers (${topItems.length})</button>
       </div>
     </div>
-    <div style="padding:3px 14px 4px;font-size:11px;color:#9ca3af;background:#fff;border-bottom:1px solid #f3f4f6">Click item # to view on kellisgifts.com</div>
     <div class="inv-wrap" style="margin:0">${tableHTML}</div>`;
 }
 
@@ -1728,23 +1771,14 @@ async function openProductListModal(custNo, custName) {
     const rows = items.map((item, i) => {
       const slug  = toKellisSlug(item.description);
       const url   = `https://www.kellisgifts.com/${slug}/`;
-      const cost = item.caseCost > 0 ? `$${item.caseCost.toFixed(2)}` : '—';
-      // Resolve quantity: raw prefUnitNumer → parsed from description (e.g. "160CT") → nothing
-      const qty = item.unitQty > 1
-        ? item.unitQty
-        : (() => { const m = (item.description || '').match(/\b(\d+)\s*(?:CT|PC|PCS|CNT|COUNT)\b/i); return m ? parseInt(m[1]) : 0; })();
-      const unitStr = item.unit
-        ? (qty > 1 ? `${item.unit}${qty}` : item.unit)
-        : (qty > 1 ? `×${qty}` : '—');
       const bg = i % 2 === 0 ? '' : 'background:#f8f9fb';
       return `<tr style="${bg}">
-        <td style="padding:9px 12px;font-family:monospace;font-size:12px;color:#6b7280;white-space:nowrap">${item.itemNo}</td>
+        <td style="padding:9px 12px;font-size:12px;color:#6b7280;white-space:nowrap">${item.category || '—'}</td>
         <td style="padding:9px 12px;font-size:13px;color:#374151;font-weight:500">
           <a href="${url}" target="_blank" style="color:#0d9488;text-decoration:none;font-weight:600" title="View on Kellis">${item.description}</a>
         </td>
+        <td style="padding:9px 12px;font-family:monospace;font-size:12px;color:#6b7280;white-space:nowrap">${item.itemNo}</td>
         <td style="padding:9px 12px;font-family:monospace;font-size:12px;color:#6b7280">${item.upc || '—'}</td>
-        <td style="padding:9px 12px;font-size:13px;text-align:right;font-weight:600;color:#1a2332">${cost}</td>
-        <td style="padding:9px 12px;font-size:13px;text-align:center;color:#6b7280;white-space:nowrap">${unitStr}</td>
       </tr>`;
     }).join('');
 
@@ -1752,11 +1786,10 @@ async function openProductListModal(custNo, custName) {
       <table style="width:100%;border-collapse:collapse;font-family:inherit">
         <thead>
           <tr style="background:#f1f5f9;border-bottom:2px solid #e5e7eb">
-            ${th('Item #')}
+            ${th('Category')}
             ${th('Item Name')}
+            ${th('Item #')}
             ${th('UPC')}
-            ${th('Cost', 'right')}
-            ${th('Unit', 'center')}
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -1766,12 +1799,7 @@ async function openProductListModal(custNo, custName) {
     const emailLines = items.map((item, i) => {
       const slug = toKellisSlug(item.description);
       const url  = `https://www.kellisgifts.com/${slug}/`;
-      const cost2 = item.caseCost > 0 ? `$${item.caseCost.toFixed(2)}` : 'N/A';
-      const qty2  = item.unitQty > 1
-        ? item.unitQty
-        : (() => { const m = (item.description || '').match(/\b(\d+)\s*(?:CT|PC|PCS|CNT|COUNT)\b/i); return m ? parseInt(m[1]) : 0; })();
-      const unitStr2 = item.unit ? (qty2 > 1 ? `${item.unit}${qty2}` : item.unit) : (qty2 > 1 ? `×${qty2}` : 'N/A');
-      return `${i + 1}. [${item.itemNo}] ${item.description}\n   ${url}\n   UPC: ${item.upc || 'N/A'} | Cost: ${cost2} | Unit: ${unitStr2}`;
+      return `${i + 1}. [${item.itemNo}] ${item.description}\n   ${url}\n   UPC: ${item.upc || 'N/A'}`;
     }).join('\n\n');
 
     const subject = `Recommended Products — ${custName}`;
