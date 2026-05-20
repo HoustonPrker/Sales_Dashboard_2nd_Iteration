@@ -312,6 +312,7 @@ function renderLBLayout(data) {
     : '';
 
   panel.innerHTML = `
+  <div style="border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08)">
     ${renderLBRibbon(awards, lastMonthLabel, updatedTime)}
     <div style="margin-top:28px;padding:0 28px">
       <div style="display:flex;align-items:flex-start;justify-content:space-between">
@@ -328,7 +329,8 @@ function renderLBLayout(data) {
       <span style="font-family:var(--mono);font-size:10px;letter-spacing:0.20em;text-transform:uppercase;color:var(--muted)">Full Standings</span>
       <div style="flex:1;height:1px;background:#e7e5e4"></div>
     </div>
-    ${renderLBStandings(standings)}`;
+    ${renderLBStandings(standings)}
+  </div>`;
 }
 
 // ── Toolbar ───────────────────────────────────────────────────
