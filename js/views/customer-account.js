@@ -1383,6 +1383,14 @@ function renderItemDrill() {
       </tr>`;
     }).join('') || '<tr><td colspan="6" style="color:#9ca3af;padding:24px;text-align:center">No best-seller items found for this category.</td></tr>';
 
+    const stickyTd = 'position:sticky;bottom:0;z-index:2;background:#f8fafc;border-top:2px solid #e5e7eb;font-weight:700;box-shadow:0 -2px 4px rgba(0,0,0,0.06)';
+    const tot12mo  = list.reduce((s, i) => s + (i.qty_12mo || 0), 0);
+    const bsTotRow = list.length ? `<tr>
+      <td colspan="4" style="${stickyTd};padding:10px 10px;color:#1a2332">TOTAL</td>
+      <td class="num-ctr" style="${stickyTd};padding:10px 10px;font-weight:800;color:#1a2332">${tot12mo || '—'}</td>
+      <td style="${stickyTd};padding:10px 10px"></td>
+    </tr>` : '';
+
     tableHTML = `<table class="data-table">
       <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
         ${th('rank',        '#',             'num-ctr')}
@@ -1393,6 +1401,7 @@ function renderItemDrill() {
         ${th('last_sold',   'Last Purchase', 'num-ctr')}
       </tr></thead>
       <tbody>${rows}</tbody>
+      ${bsTotRow ? `<tfoot style="position:sticky;bottom:0;z-index:2">${bsTotRow}</tfoot>` : ''}
     </table>`;
   }
 
