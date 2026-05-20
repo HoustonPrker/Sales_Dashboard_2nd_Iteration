@@ -97,12 +97,11 @@ function renderOrderDetail(custNo, cust, order) {
       <span style="color:#1a2332;font-weight:600">Order ${ticketNo}</span>
     </div>`;
 
-  // Compact pill — overrides the min-height/padding from .mgr-pill so rows stay tight
-  const kpiPill = (label, value, sub) => `
-    <div class="mgr-pill" style="min-height:0;padding:9px 12px">
-      <div class="mgr-pill-label" style="font-size:10px">${label}</div>
-      <div class="mgr-pill-value" style="font-size:18px">${value}</div>
-      <div class="mgr-pill-sub" style="font-size:11px">${sub}</div>
+  const kpiTile = (label, value, sub) => `
+    <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:4px;padding:10px 12px">
+      <div style="font-family:ui-monospace,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#fff;margin-bottom:4px;font-weight:600">${label}</div>
+      <div style="font-size:19px;font-weight:600;color:#fff;line-height:1.2">${value}</div>
+      <div style="font-size:11px;color:#fff;margin-top:2px">${sub}</div>
     </div>`;
 
   const vsPriorValue = vsPriorPct !== null
@@ -112,15 +111,38 @@ function renderOrderDetail(custNo, cust, order) {
     ? `${fmt$(totExt)} vs ${fmt$(priorTotal)}`
     : 'no prior order found';
 
-  // ── Combined header — matches accounts page mgr-panel structure ─
-  const header = `
-    <div id="od-header" class="mgr-panel" style="margin-bottom:12px">
-      <div style="display:flex;gap:0;align-items:stretch">
+  const bsPct    = lineCount > 0 ? Math.round(bsLines.length / lineCount * 100) : 0;
+  const repPct   = lineCount > 0 ? Math.round(repeatLines.length / lineCount * 100) : 0;
 
-        <!-- Identity column -->
-        <div style="flex-shrink:0;width:185px;padding-right:18px;border-right:1px solid rgba(255,255,255,0.15);margin-right:18px;display:flex;flex-direction:column;justify-content:space-between">
+  const donutCard = (id, title, rows) => `
+    <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:4px;padding:14px 16px;display:grid;grid-template-columns:1fr auto;align-items:center;gap:14px;min-width:250px">
+      <div>
+        <div style="font-family:ui-monospace,monospace;font-size:9.5px;letter-spacing:0.16em;text-transform:uppercase;color:#fff;margin-bottom:8px;font-weight:600">${title}</div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          ${rows.map(r => `
+          <div style="display:flex;align-items:center;gap:7px;font-size:11.5px;color:rgba(255,255,255,0.92)">
+            <span style="width:10px;height:10px;border-radius:2px;background:${r.color};display:inline-block;flex-shrink:0"></span>
+            <span style="flex:1">${r.label}</span>
+            <span style="font-family:ui-monospace,monospace;font-size:10.5px;color:#fff">${r.pct}%</span>
+          </div>`).join('')}
+        </div>
+      </div>
+      <div id="${id}-wrap" style="width:130px;height:130px;flex-shrink:0;position:relative">
+        <canvas id="${id}" width="130" height="130"></canvas>
+      </div>
+    </div>`;
+
+  // ── Combined header — flex: left cluster + right cluster ─────
+  const header = `
+    <div id="od-header" class="mgr-panel" style="margin-bottom:12px;display:flex;align-items:stretch;gap:18px">
+
+      <!-- Left cluster: identity + KPI grid (flex:1 so it fills space before donuts) -->
+      <div style="flex:1;display:flex;gap:18px;align-items:stretch">
+
+        <!-- Identity col -->
+        <div style="display:flex;flex-direction:column;justify-content:space-between;min-width:210px">
           <div>
-            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:rgba(255,255,255,0.45);margin-bottom:3px">Order</div>
+            <div style="font-family:ui-monospace,monospace;font-size:9px;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:3px">Order</div>
             <div style="font-size:26px;font-weight:800;color:#fff;line-height:1">#${ticketNo}</div>
             <div style="margin-top:10px;display:flex;flex-direction:column;gap:4px">
               <div style="display:flex;gap:6px;align-items:baseline">
@@ -149,42 +171,35 @@ function renderOrderDetail(custNo, cust, order) {
           </div>
         </div>
 
-        <!-- KPI pills — 2 rows of 3, columns capped so pills stay compact -->
-        <div id="od-kpi-grid" style="flex-shrink:0;display:flex;flex-direction:column;gap:8px;justify-content:center">
-          <div style="display:grid;grid-template-columns:repeat(3,minmax(120px,170px));gap:8px">
-            ${kpiPill('Order Total', fmt$(totExt), 'post-discount')}
-            ${kpiPill('Profit', fmt$(margin), marginPct.toFixed(1) + '% of order')}
-            ${kpiPill('vs Prior Order', vsPriorValue, vsPriorSub)}
+        <!-- KPI tiles 3×2 — flex:1 spreads tiles across available width -->
+        <div id="od-kpi-grid" style="flex:1;display:flex;flex-direction:column;gap:10px;justify-content:center">
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+            ${kpiTile('Order Total', fmt$(totExt), 'post-discount')}
+            ${kpiTile('Profit', fmt$(margin), marginPct.toFixed(1) + '% of order')}
+            ${kpiTile('vs Prior Order', vsPriorValue, vsPriorSub)}
           </div>
-          <div style="display:grid;grid-template-columns:repeat(3,minmax(120px,170px));gap:8px">
-            ${kpiPill('Lines', lineCount.toLocaleString(), 'unique items')}
-            ${kpiPill('Units', totQty.toLocaleString(), 'total qty')}
-            ${kpiPill('Avg Line', fmt$(avgLine), 'revenue per line')}
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+            ${kpiTile('Lines', lineCount.toLocaleString(), 'unique items')}
+            ${kpiTile('Units', totQty.toLocaleString(), 'total qty')}
+            ${kpiTile('Avg Line', fmt$(avgLine), 'revenue per line')}
           </div>
         </div>
 
-        <!-- Donut charts — side-by-side, fixed canvas height so flex-grow can't inflate them -->
-        ${lineCount > 0 ? `
-        <div class="od-no-print" style="flex:1;display:flex;gap:12px;padding-left:16px;align-self:stretch;align-items:stretch;min-width:0">
-          <div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-width:0">
-            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#fff;margin-bottom:6px;flex-shrink:0">Best-Seller Mix</div>
-            <div id="od-bs-wrap" style="position:relative;height:160px;flex:none"><canvas id="od-bs-chart"></canvas></div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;flex-shrink:0">
-              <span style="display:flex;align-items:center;gap:4px;font-size:12px;color:rgba(255,255,255,0.85)"><span style="width:8px;height:8px;border-radius:2px;background:#f59e0b;display:inline-block;flex-shrink:0"></span>Best sellers</span>
-              <span style="display:flex;align-items:center;gap:4px;font-size:12px;color:rgba(255,255,255,0.85)"><span style="width:8px;height:8px;border-radius:2px;background:rgba(255,255,255,0.22);display:inline-block;flex-shrink:0"></span>Other</span>
-            </div>
-          </div>
-          <div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-width:0">
-            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#fff;margin-bottom:6px;flex-shrink:0">New vs Repeat</div>
-            <div id="od-nr-wrap" style="position:relative;height:160px;flex:none"><canvas id="od-nr-chart"></canvas></div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;flex-shrink:0">
-              <span style="display:flex;align-items:center;gap:4px;font-size:12px;color:rgba(255,255,255,0.85)"><span style="width:8px;height:8px;border-radius:2px;background:#0d9488;display:inline-block;flex-shrink:0"></span>Repeat</span>
-              <span style="display:flex;align-items:center;gap:4px;font-size:12px;color:rgba(255,255,255,0.85)"><span style="width:8px;height:8px;border-radius:2px;background:#3b82f6;display:inline-block;flex-shrink:0"></span>New</span>
-            </div>
-          </div>
-        </div>` : ''}
+      </div><!-- end left cluster -->
 
-      </div>
+      <!-- Right cluster: two donut cards side-by-side -->
+      ${lineCount > 0 ? `
+      <div class="od-no-print" style="flex-shrink:0;display:flex;gap:14px;align-items:center">
+        ${donutCard('od-bs-chart', 'Best-Seller Mix', [
+          { color: '#fbbf24', label: 'Best sellers', pct: bsPct },
+          { color: '#64748b', label: 'Other',        pct: 100 - bsPct },
+        ])}
+        ${donutCard('od-nr-chart', 'New vs Repeat', [
+          { color: '#10b981', label: 'Repeat', pct: repPct },
+          { color: '#cbd5e1', label: 'New',    pct: 100 - repPct },
+        ])}
+      </div>` : ''}
+
     </div>`;
 
   // ── Filter toolbar ───────────────────────────────────────────
@@ -234,9 +249,11 @@ function odRenderCompositionCharts(bsCount, totalCount, repeatCount, newCount) {
 
   function makeChartOpts(filterMap) {
     return {
-      responsive: true,
+      responsive: false,
       maintainAspectRatio: false,
-      cutout: '58%',
+      cutout: '60%',
+      width: 130,
+      height: 130,
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -317,7 +334,6 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
     if (l.isBestSeller) tags.push(tagPill('★ Best',   '#fde68a', '#92400e'));
     if (l.isRepeat)     tags.push(tagPill('↻ Repeat', '#99f6e4', '#0f766e'));
     else if (l.isRepeat !== undefined) tags.push(tagPill('+ New', '#bfdbfe', '#1e40af'));
-    const marginColor = lineMargin > 0 ? '#059669' : lineMargin < 0 ? '#dc2626' : '#9ca3af';
     return `<tr>
       <td style="padding:8px 12px;min-width:80px;text-align:center">
         <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center">${tags.join('') || ''}</div>
@@ -328,8 +344,8 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
       <td class="num-ctr" style="padding:8px 12px;font-size:13px">${l.qty}</td>
       <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:#6b7280">${l.unitPrice > 0 ? f(l.unitPrice) : '—'}</td>
       <td class="num-ctr" style="padding:8px 12px;font-size:13px;font-weight:600">${l.extPrice > 0 ? f(l.extPrice) : '—'}</td>
-      <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:${marginColor}">${l.unitCost > 0 ? f(lineMargin) : '—'}</td>
-      <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:${marginColor}">${lineMarginPct !== null && l.unitCost > 0 ? lineMarginPct.toFixed(1) + '%' : '—'}</td>
+      <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:#1a2332">${l.unitCost > 0 ? f(lineMargin) : '—'}</td>
+      <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:#1a2332">${lineMarginPct !== null && l.unitCost > 0 ? lineMarginPct.toFixed(1) + '%' : '—'}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="9" style="padding:24px;color:#9ca3af;text-align:center">No matching items.</td></tr>';
 
@@ -369,8 +385,8 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
         <td class="num-ctr" style="${stickyTd};padding:10px 12px">${totQty}</td>
         <td style="${stickyTd};padding:10px 12px"></td>
         <td class="num-ctr" style="${stickyTd};padding:10px 12px">${f(totExt)}</td>
-        <td class="num-ctr" style="${stickyTd};padding:10px 12px;color:${totMarginColor}">${totMargin !== 0 ? f(totMargin) : '—'}</td>
-        <td class="num-ctr" style="${stickyTd};padding:10px 12px;color:${totMarginColor}">${totMarginPct !== null ? totMarginPct.toFixed(1) + '%' : '—'}</td>
+        <td class="num-ctr" style="${stickyTd};padding:10px 12px;color:#1a2332">${totMargin !== 0 ? f(totMargin) : '—'}</td>
+        <td class="num-ctr" style="${stickyTd};padding:10px 12px;color:#1a2332">${totMarginPct !== null ? totMarginPct.toFixed(1) + '%' : '—'}</td>
       </tr>
     </tfoot>
   </table>`;
