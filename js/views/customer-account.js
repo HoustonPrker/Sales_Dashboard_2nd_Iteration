@@ -1144,33 +1144,32 @@ function exportCatCSV() {
 function printCatTable() {
   const cust    = window.caLastCust    || {};
   const catData = window.caLastCatData || [];
-  const mtd     = window.caLastMtd     || {};
   if (!catData.length) return;
 
-  const ytdTotal  = parseFloat(cust.USER_YTD_SALES      || 0) || catData.reduce((s, c) => s + c.currentYtdAmt, 0);
-  const priorYear = parseFloat(cust.USER_PYTD_SALES      || 0) || 0;
-  const ppyTotal  = parseFloat(cust.USER_PPYTD_SALES     || 0) || 0;
-  const annTarget = parseFloat(cust.USER_ANNUAL_GOALS    || 0) || 0;
-  const lifetime  = parseFloat(cust.USER_LIFETIME_SALES  || 0) || 0;
-  const mtdTotal  = mtd?.total || 0;
-  const pctToTgt  = annTarget > 0 ? (ytdTotal / annTarget * 100).toFixed(1) + '%' : '—';
-  const pctChg    = priorYear > 0 ? ((ytdTotal - priorYear) / priorYear * 100) : null;
-  const pctChgStr = pctChg !== null ? (pctChg >= 0 ? '+' : '') + pctChg.toFixed(1) + '%' : '—';
+  const custName = cust.name || cust.custNo || '';
+  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
-  // KPI tile colors: green if on track, red if below, neutral if no target
-  const ytdVsTgt   = annTarget > 0 ? (ytdTotal >= annTarget * (new Date().getMonth() / 12) ? '#059669' : '#dc2626') : '#1a2332';
-  const pctTgtColor = annTarget > 0 ? (ytdTotal / annTarget >= (new Date().getMonth() / 12) ? '#059669' : '#dc2626') : '#1a2332';
-  const ytdVsPrior  = pctChg !== null ? (pctChg >= 0 ? '#059669' : '#dc2626') : '#1a2332';
+  // Clone the live KPI rows from the DOM so values are always in sync
+  const liveKpiRows = document.querySelectorAll('.ca-kpi-row');
+  let kpiHtml = '';
+  liveKpiRows.forEach(row => {
+    // Strip tooltip icons and interactive elements, keep labels/values/subs
+    const clone = row.cloneNode(true);
+    clone.querySelectorAll('.kpi-info-icon, .kpi-tooltip-box, .kpi-info-wrap').forEach(el => {
+      // Unwrap kpi-info-wrap (keep its text children), remove icon+tooltip
+      if (el.classList.contains('kpi-info-wrap')) {
+        const txt = el.querySelector('.mgr-pill-value') ? el.textContent : el.childNodes[0]?.textContent || '';
+        el.replaceWith(document.createTextNode(txt.trim()));
+      } else {
+        el.remove();
+      }
+    });
+    // Flatten inline styles for print: remove run-rate bar track markup
+    clone.querySelectorAll('.mgr-runrate-bar-track').forEach(el => el.remove());
+    kpiHtml += `<div style="display:flex;gap:6px;margin-bottom:6px">${clone.innerHTML}</div>`;
+  });
 
-  const fmt = n => '$' + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  const kpi = (label, value, sub = '', valColor = '#1a2332') => `
-    <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px 14px;flex:1;min-width:0">
-      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:#6b7280;margin-bottom:3px">${label}</div>
-      <div style="font-size:15px;font-weight:800;color:${valColor}">${value}</div>
-      ${sub ? `<div style="font-size:9px;color:#9ca3af;margin-top:2px">${sub}</div>` : ''}
-    </div>`;
-
-  // Build sorted category rows using the same ordering as the live table
+  // Build sorted category rows
   const sorted = [...catData].sort((a, b) => {
     const dir = caCatSort.dir === 'asc' ? 1 : -1;
     switch (caCatSort.col) {
@@ -1189,22 +1188,29 @@ function printCatTable() {
     totPrior += c.priorYtdAmt   || 0;
     totCurrQ += c.currentQty    || 0;
     totPriorQ += c.priorQty     || 0;
-    const dc   = c.dollarChange || 0;
-    const dBg  = dc >= 0 ? 'rgba(22,163,74,0.12)' : 'rgba(220,38,38,0.12)';
-    const dCl  = dc >= 0 ? '#059669' : '#dc2626';
+    const dc  = c.dollarChange || 0;
+    const dBg = dc >= 0 ? 'rgba(22,163,74,0.12)' : 'rgba(220,38,38,0.12)';
+    const dCl = dc >= 0 ? '#059669' : '#dc2626';
+    const pctChg = c.priorYtdAmt > 0 ? ((c.currentYtdAmt - c.priorYtdAmt) / c.priorYtdAmt * 100) : null;
+    const pctStr = pctChg !== null ? (pctChg >= 0 ? '+' : '') + pctChg.toFixed(1) + '%' : '—';
+    const pctCl  = pctChg !== null ? (pctChg >= 0 ? '#059669' : '#dc2626') : '#9ca3af';
     return `<tr>
-      <td style="padding:7px 12px;border-bottom:1px solid #f3f4f6">${c.description || c.categoryCode}</td>
-      <td style="padding:7px 12px;text-align:right;border-bottom:1px solid #f3f4f6">${fmt$(c.currentYtdAmt)}</td>
-      <td style="padding:7px 12px;text-align:right;border-bottom:1px solid #f3f4f6">${c.currentQty > 0 ? Math.round(c.currentQty).toLocaleString() : '—'}</td>
-      <td style="padding:7px 12px;text-align:right;border-bottom:1px solid #f3f4f6">${c.priorYtdAmt > 0 ? fmt$(c.priorYtdAmt) : '—'}</td>
-      <td style="padding:7px 12px;text-align:right;border-bottom:1px solid #f3f4f6">${c.priorQty > 0 ? Math.round(c.priorQty).toLocaleString() : '—'}</td>
-      <td style="padding:7px 12px;text-align:right;border-bottom:1px solid #f3f4f6"><span style="background:${dBg};color:${dCl};padding:3px 8px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;display:inline-block">${dc >= 0 ? '+' : ''}${fmt$(dc)}</span></td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-size:11px">${c.description || c.categoryCode}</td>
+      <td style="padding:6px 10px;text-align:right;border-bottom:1px solid #f3f4f6;font-size:11px">${fmt$(c.currentYtdAmt)}</td>
+      <td style="padding:6px 10px;text-align:right;border-bottom:1px solid #f3f4f6;font-size:11px">${c.currentQty > 0 ? Math.round(c.currentQty).toLocaleString() : '—'}</td>
+      <td style="padding:6px 10px;text-align:right;border-bottom:1px solid #f3f4f6;font-size:11px">${c.priorYtdAmt > 0 ? fmt$(c.priorYtdAmt) : '—'}</td>
+      <td style="padding:6px 10px;text-align:right;border-bottom:1px solid #f3f4f6;font-size:11px">${c.priorQty > 0 ? Math.round(c.priorQty).toLocaleString() : '—'}</td>
+      <td style="padding:6px 10px;text-align:right;border-bottom:1px solid #f3f4f6;font-size:11px"><span style="background:${dBg};color:${dCl};padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;display:inline-block">${dc >= 0 ? '+' : ''}${fmt$(dc)}</span></td>
+      <td style="padding:6px 10px;text-align:right;border-bottom:1px solid #f3f4f6;font-size:11px;font-weight:600;color:${pctCl}">${pctStr}</td>
     </tr>`;
   }).join('');
 
-  const totDollar  = totCurr - totPrior;
+  const totDollar   = totCurr - totPrior;
   const totDollarBg = totDollar >= 0 ? 'rgba(22,163,74,0.12)' : 'rgba(220,38,38,0.12)';
   const totDollarCl = totDollar >= 0 ? '#059669' : '#dc2626';
+  const totPct      = totPrior > 0 ? ((totDollar / totPrior) * 100) : null;
+  const totPctStr   = totPct !== null ? (totPct >= 0 ? '+' : '') + totPct.toFixed(1) + '%' : '—';
+  const totPctCl    = totPct !== null ? (totPct >= 0 ? '#059669' : '#dc2626') : '#9ca3af';
 
   let area = document.getElementById('ca-print-area');
   if (!area) {
@@ -1215,38 +1221,39 @@ function printCatTable() {
 
   area.innerHTML = `
     <div style="font-family:Inter,Arial,sans-serif;color:#1a2332;padding:0">
-      <!-- KPI ribbon -->
-      <div style="display:flex;gap:8px;flex-wrap:nowrap;margin-bottom:16px">
-        ${kpi('YTD Sales',      fmt(ytdTotal),                          'Current year to date',  ytdVsTgt)}
-        ${kpi('Annual Target',  annTarget > 0 ? fmt(annTarget) : '—',  'Full year goal')}
-        ${kpi('% to Target',    pctToTgt,                               pctChgStr + ' vs prior', pctTgtColor)}
-        ${kpi('Prior Year',     priorYear > 0 ? fmt(priorYear) : '—',  'PYTD',                  ytdVsPrior)}
-        ${kpi('Prior Prior Yr', ppyTotal  > 0 ? fmt(ppyTotal)  : '—',  '2 years ago')}
-        ${kpi('Month to Date',  fmt(mtdTotal),                          'Current month')}
-        ${kpi('Lifetime Sales', lifetime  > 0 ? fmt(lifetime)  : '—',  'All time')}
+      <!-- Header -->
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #3d5a80">
+        <div style="font-size:18px;font-weight:800;color:#3d5a80">${custName}</div>
+        <div style="font-size:10px;color:#6b7280">${today}</div>
       </div>
 
+      <!-- Full KPI ribbon cloned from live DOM -->
+      <div style="margin-bottom:16px">${kpiHtml}</div>
+
       <!-- Category breakdown -->
-      <table style="border-collapse:collapse;width:100%;font-size:12px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:#3d5a80;margin-bottom:6px">Category Breakdown</div>
+      <table style="border-collapse:collapse;width:100%">
         <thead>
           <tr style="background:#f3f4f6">
-            <th style="text-align:left;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Category</th>
-            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Current YTD $</th>
-            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Curr Unq Qty</th>
-            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">Prior YTD $</th>
-            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb;cursor:help" title="Prior year to date (Jan 1 – same date last year), not the full prior calendar year">Prior Unq Qty</th>
-            <th style="text-align:right;padding:8px 12px;font-weight:700;border-bottom:2px solid #e5e7eb">$ Change</th>
+            <th style="text-align:left;padding:7px 10px;font-size:11px;font-weight:700;border-bottom:2px solid #e5e7eb">Category</th>
+            <th style="text-align:right;padding:7px 10px;font-size:11px;font-weight:700;border-bottom:2px solid #e5e7eb">Current YTD $</th>
+            <th style="text-align:right;padding:7px 10px;font-size:11px;font-weight:700;border-bottom:2px solid #e5e7eb">Curr Qty</th>
+            <th style="text-align:right;padding:7px 10px;font-size:11px;font-weight:700;border-bottom:2px solid #e5e7eb">Prior YTD $</th>
+            <th style="text-align:right;padding:7px 10px;font-size:11px;font-weight:700;border-bottom:2px solid #e5e7eb">Prior Qty</th>
+            <th style="text-align:right;padding:7px 10px;font-size:11px;font-weight:700;border-bottom:2px solid #e5e7eb">$ Change</th>
+            <th style="text-align:right;padding:7px 10px;font-size:11px;font-weight:700;border-bottom:2px solid #e5e7eb">% Change</th>
           </tr>
         </thead>
         <tbody>
           ${tableRows}
           <tr style="font-weight:700;background:#f8fafc;border-top:2px solid #e5e7eb">
-            <td style="padding:8px 12px">TOTAL</td>
-            <td style="padding:8px 12px;text-align:right">${fmt$(totCurr)}</td>
-            <td style="padding:8px 12px;text-align:right">${totCurrQ > 0 ? Math.round(totCurrQ).toLocaleString() : '—'}</td>
-            <td style="padding:8px 12px;text-align:right">${totPrior > 0 ? fmt$(totPrior) : '—'}</td>
-            <td style="padding:8px 12px;text-align:right">${totPriorQ > 0 ? Math.round(totPriorQ).toLocaleString() : '—'}</td>
-            <td style="padding:8px 12px;text-align:right"><span style="background:${totDollarBg};color:${totDollarCl};padding:3px 8px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;display:inline-block">${totDollar >= 0 ? '+' : ''}${fmt$(totDollar)}</span></td>
+            <td style="padding:7px 10px;font-size:11px">TOTAL</td>
+            <td style="padding:7px 10px;text-align:right;font-size:11px">${fmt$(totCurr)}</td>
+            <td style="padding:7px 10px;text-align:right;font-size:11px">${totCurrQ > 0 ? Math.round(totCurrQ).toLocaleString() : '—'}</td>
+            <td style="padding:7px 10px;text-align:right;font-size:11px">${totPrior > 0 ? fmt$(totPrior) : '—'}</td>
+            <td style="padding:7px 10px;text-align:right;font-size:11px">${totPriorQ > 0 ? Math.round(totPriorQ).toLocaleString() : '—'}</td>
+            <td style="padding:7px 10px;text-align:right;font-size:11px"><span style="background:${totDollarBg};color:${totDollarCl};padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;display:inline-block">${totDollar >= 0 ? '+' : ''}${fmt$(totDollar)}</span></td>
+            <td style="padding:7px 10px;text-align:right;font-size:11px;font-weight:700;color:${totPctCl}">${totPctStr}</td>
           </tr>
         </tbody>
       </table>

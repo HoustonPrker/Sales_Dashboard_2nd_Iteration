@@ -782,6 +782,18 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
   body.ca-print-mode > *:not(#ca-print-area) { display: none !important; }
   body.ca-print-mode #ca-print-area { display: block !important; }
 
+  /* Re-style cloned KPI pills on white background */
+  #ca-print-area .mgr-pill {
+    background: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+    flex: 1;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  #ca-print-area .mgr-pill-label { color: #6b7280 !important; font-size: 9px !important; }
+  #ca-print-area .mgr-pill-value { color: #1a2332 !important; font-size: 14px !important; }
+  #ca-print-area .mgr-pill-sub   { color: #9ca3af !important; font-size: 9px !important; }
+
   /* Hide everything except the order detail panel */
   body:not(.ca-print-mode) .nav-bar,
   body:not(.ca-print-mode) .tab-bar,
