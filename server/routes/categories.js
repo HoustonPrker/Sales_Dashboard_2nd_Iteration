@@ -4,6 +4,48 @@
 // GET /proxy/all-categories      — aggregated across all rep accounts
 // ============================================================
 
+// Pinned categories: always included in every customer's breakdown even at $0.
+// categoryCode must match NCR's actual code; description is the display label.
+const PINNED_CATEGORIES = [
+  { categoryCode: 'BABY',       description: 'BABY'         },
+  { categoryCode: 'BLNWEIGHTS', description: 'BALLOON WTS'  },
+  { categoryCode: 'BLOON',      description: 'BALLOONS'      },
+  { categoryCode: 'CANDY',      description: 'CANDY'         },
+  { categoryCode: 'ELECTRONIC', description: 'ELECTRONICS'   },
+  { categoryCode: 'FASHN',      description: 'FASHION'       },
+  { categoryCode: 'FIXTURES',   description: 'FIXTURES'      },
+  { categoryCode: 'GIFTS',      description: 'GIFTS'         },
+  { categoryCode: 'HBA',        description: 'HEALTH & BEAUTY' },
+  { categoryCode: 'HOMEOFFICE', description: 'HOME OFFICE'   },
+  { categoryCode: 'INSPR',      description: 'INSPIRATIONAL' },
+  { categoryCode: 'KELBOUQUET', description: 'BOUQUET'       },
+  { categoryCode: 'KELCHNGMKR', description: 'CHANGEMAKER'   },
+  { categoryCode: 'KELLILOON',  description: 'KELLILOON'     },
+  { categoryCode: 'PLUSH',      description: 'PLUSH'         },
+  { categoryCode: 'SEASN',      description: 'SEASONAL'      },
+  { categoryCode: 'TOYS',       description: 'TOYS'          },
+];
+
+function mergePinnedCategories(result) {
+  const seen = new Set(result.map(c => (c.categoryCode || '').toUpperCase()));
+  for (const p of PINNED_CATEGORIES) {
+    if (!seen.has(p.categoryCode.toUpperCase())) {
+      result.push({
+        categoryCode:  p.categoryCode,
+        description:   p.description,
+        currentYtdAmt: 0,
+        currentQty:    0,
+        priorYtdAmt:   0,
+        priorQty:      0,
+        mtdAmt:        0,
+        mtdQty:        0,
+        dollarChange:  0,
+      });
+    }
+  }
+  return result;
+}
+
 const express       = require('express');
 const router        = express.Router();
 const { doFetch, fetchAllPages, ytdDateRange, SALES_REP } = require('../lib/api');
@@ -81,8 +123,9 @@ router.get('/categories/:custNo', async (req, res) => {
           ? parseFloat(c.dollarChange)
           : parseFloat(c.currentYtdAmount || 0) - parseFloat(c.priorYtdAmount || 0),
       };
-    }).filter(c => c.currentYtdAmt > 0 || c.priorYtdAmt > 0)
-      .sort((a, b) => b.currentYtdAmt - a.currentYtdAmt);
+    }).filter(c => c.currentYtdAmt > 0 || c.priorYtdAmt > 0);
+    mergePinnedCategories(result);
+    result.sort((a, b) => b.currentYtdAmt - a.currentYtdAmt);
     custCatCache[key] = { data: result, ts: Date.now() };
     res.json(result);
   } catch (e) {

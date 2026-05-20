@@ -960,11 +960,12 @@ function buildMonthlyData(orders) {
 }
 
 // ── Always-show category list ─────────────────────────────────
-// These categories always appear in the table even with $0 sales.
+// NCR category codes that are pinned — server guarantees these arrive even at $0.
+// Client-side list is the fallback safety net; must use real NCR codes.
 const CA_ALWAYS_SHOW = [
-  'BABY','BALLOON WTS','BALLOONS','CANDY','ELECTRONIC','FASHION',
-  'FIXTURES','GIFTS','HEALTH & BEAUTY','HOMEOFFICE','INSPIRATIONAL',
-  'BOUQUET','CHANGEMAKER','KELLILOON','PLUSH','SEASONAL','TOYS',
+  'BABY','BLNWEIGHTS','BLOON','CANDY','ELECTRONIC','FASHN',
+  'FIXTURES','GIFTS','HBA','HOMEOFFICE','INSPR',
+  'KELBOUQUET','KELCHNGMKR','KELLILOON','PLUSH','SEASN','TOYS',
 ];
 
 // ── Category table ────────────────────────────────────────────
