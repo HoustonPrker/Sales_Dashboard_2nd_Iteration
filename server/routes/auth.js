@@ -1,73 +1,108 @@
-const express        = require('express');
-const router         = express.Router();
-const { validateLDAP } = require('../lib/ldap-auth');
-const { findUser, listUsers } = require('../lib/user-store');
+const express          = require('express');
+const router           = express.Router();
+const { validateLDAP, validateUsername } = require('../lib/ldap-auth');
+const { findUser, listUsers }            = require('../lib/user-store');
 const { createSession, deleteSession, updateSession } = require('../lib/sessions');
-const requireAuth    = require('../middleware/requireAuth');
+const requireAuth      = require('../middleware/requireAuth');
+const rl               = require('../lib/login-rate-limiter');
 
 const IS_PROD = process.env.NODE_ENV === 'production';
+
+// Single generic error message for every auth failure — never reveal which step failed
+const AUTH_FAIL = { error: 'Invalid username or password' };
 
 function setCookie(res, sessionId) {
   res.cookie('kellis_session', sessionId, {
     httpOnly: true,
-    secure:   IS_PROD,   // HTTPS only in production
+    secure:   IS_PROD,
     sameSite: 'Lax',
-    // NO maxAge — session cookie, dies when browser closes
+    // No maxAge — session cookie, dies when browser closes
   });
+}
+
+function clientIP(req) {
+  return (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown')
+    .split(',')[0].trim();
 }
 
 // POST /auth/login
 router.post('/login', async (req, res) => {
+  const ip = clientIP(req);
+
+  // 1. Extract and type-check inputs — never log raw inputs at this stage
   const { username, password } = req.body || {};
-  if (!username || !password)
-    return res.status(400).json({ error: 'Username and password are required' });
 
-  // Step 1: user must exist in users.json and be active
+  // 2. Validate username against strict allowlist BEFORE touching LDAP
+  if (!validateUsername(username)) {
+    console.log(`[auth] validation_failed ip=${ip} reason=bad_username`);
+    return res.status(401).json(AUTH_FAIL);
+  }
+
+  // 3. Reject empty or whitespace-only passwords — never let them reach client.bind()
+  if (typeof password !== 'string' || password.trim().length === 0) {
+    console.log(`[auth] validation_failed ip=${ip} username="${username}" reason=empty_password`);
+    return res.status(401).json(AUTH_FAIL);
+  }
+
+  // 4. Rate limit — check BEFORE any expensive operations
+  if (rl.checkIP(ip)) {
+    console.log(`[auth] rate_limited ip=${ip} username="${username}" reason=ip_lockout`);
+    return res.status(401).json(AUTH_FAIL);
+  }
+  if (rl.checkUsername(username)) {
+    console.log(`[auth] rate_limited ip=${ip} username="${username}" reason=username_lockout`);
+    return res.status(401).json(AUTH_FAIL);
+  }
+
+  // 5. User must exist in users.json and be active
   const record = findUser(username);
-  if (!record) {
-    console.log(`[auth] 401 — user "${username}" not found in users.json`);
-    return res.status(401).json({ error: 'Invalid credentials' });
-  }
-  if (!record.active) {
-    console.log(`[auth] 401 — user "${username}" exists but active=false`);
-    return res.status(401).json({ error: 'Invalid credentials' });
+  if (!record || !record.active) {
+    // Still consume a rate-limit slot — prevents username enumeration via timing
+    rl.failUsername(username);
+    rl.failIP(ip);
+    console.log(`[auth] not_in_users_json ip=${ip} username="${username}"`);
+    return res.status(401).json(AUTH_FAIL);
   }
 
-  // Step 2: validate against LDAP
+  // 6. LDAP bind — username has already been validated, password is non-empty
   let ldapOk = false;
   try {
-    const { LDAP_URL, LDAP_BIND_DN_TEMPLATE } = process.env;
-    if (!LDAP_URL) {
-      console.log('[auth] 503 — LDAP_URL is not configured');
+    if (!process.env.LDAP_URL) {
+      console.log('[auth] 503 LDAP_URL not configured');
       return res.status(503).json({ error: 'Authentication service unavailable — try again shortly' });
     }
     ldapOk = await validateLDAP(username, password);
   } catch (err) {
+    // Log server-side only — never expose LDAP error detail to client
     if (err.message.startsWith('LDAP_UNREACHABLE')) {
-      console.log(`[auth] 503 — LDAP server unreachable: ${err.message}`);
-      return res.status(503).json({ error: 'Authentication service unavailable — try again shortly' });
+      console.log(`[auth] 503 LDAP unreachable ip=${ip} username="${username}"`);
+    } else {
+      console.error(`[auth] 503 LDAP unexpected error ip=${ip} username="${username}"`, err.message);
     }
-    console.log(`[auth] 503 — LDAP unexpected error: ${err.message}`);
     return res.status(503).json({ error: 'Authentication service unavailable — try again shortly' });
   }
 
   if (!ldapOk) {
-    console.log(`[auth] 401 — LDAP bind returned false for "${username}" (wrong password or bad bind template)`);
-    return res.status(401).json({ error: 'Invalid credentials' });
+    rl.failUsername(username);
+    rl.failIP(ip);
+    console.log(`[auth] bind_failed ip=${ip} username="${username}"`);
+    return res.status(401).json(AUTH_FAIL);
   }
 
-  // Step 3: create session
+  // 7. Auth success — clear per-username failure counter, create session
+  rl.succeedUsername(username);
+
   const sessionUser = {
-    username:        record.username,
-    displayName:     record.displayName,
-    role:            record.role,
-    rep_prefix:      record.rep_prefix || null,
-    is_super_admin:  record.is_super_admin || false,
+    username:       record.username,
+    displayName:    record.displayName,
+    role:           record.role,
+    rep_prefix:     record.rep_prefix || null,
+    is_super_admin: record.is_super_admin || false,
   };
   const sessionId = createSession(sessionUser);
   setCookie(res, sessionId);
 
-  console.log(`[auth] login OK user=${record.username} role=${record.role}`);
+  console.log(`[auth] success ip=${ip} username="${record.username}" role=${record.role}`);
   return res.json({
     displayName:    record.displayName,
     role:           record.role,
@@ -106,7 +141,7 @@ router.post('/view-as/:username', requireAuth, (req, res) => {
   res.json({ ok: true, scoped_view_as: scopedViewAs });
 });
 
-// GET /auth/advisors — list all active users with a rep_prefix (for Rep filter UI)
+// GET /auth/advisors — list active users with a rep_prefix (for Rep filter UI)
 router.get('/advisors', requireAuth, (req, res) => {
   const advisors = listUsers()
     .filter(u => u.active && u.rep_prefix)
