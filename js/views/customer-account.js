@@ -417,15 +417,15 @@ function renderCA(cust, catData, mtd, orders) {
           const svgMobile = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>`;
           const svgEmail  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>`;
           const svgUrl    = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
-          const row = (icon, href, label) => `<a href="${href}" style="display:flex;align-items:center;gap:4px;color:#3d5a80;text-decoration:none;font-size:12px;white-space:nowrap" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${icon}<span>${label}</span></a>`;
+          const row = (icon, href, label) => `<a href="${href}" style="display:flex;align-items:center;gap:4px;color:#3d5a80;text-decoration:none;font-size:12px;white-space:nowrap" onmouseover="this.style.color='#0d9488'" onmouseout="this.style.color='#3d5a80'">${icon}<span>${label}</span></a>`;
           const lines = [
             c.phone  ? row(svgPhone,  `tel:${c.phone.replace(/\D/g,'')}`,   c.phone)  : '',
             c.mobile ? row(svgMobile, `tel:${c.mobile.replace(/\D/g,'')}`,  c.mobile) : '',
             c.email  ? row(svgEmail,  `mailto:${c.email}`,                  c.email)  : '',
             c.url    ? row(svgUrl,    c.url.startsWith('http') ? c.url : `https://${c.url}`, c.url) : '',
           ].filter(Boolean).join('');
-          return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;display:flex;flex-direction:column;gap:4px;min-width:0">
-            ${c.name ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#1a2332;margin-bottom:2px">${c.name}</div>` : ''}
+          return `<div style="border-left:3px solid #3d5a80;padding:4px 10px;display:flex;flex-direction:column;gap:3px;min-width:0">
+            ${c.name ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#1a2332">${c.name}</div>` : ''}
             ${lines}
           </div>`;
         }).join('')}
