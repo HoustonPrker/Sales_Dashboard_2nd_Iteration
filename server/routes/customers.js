@@ -655,7 +655,6 @@ router.get('/customer/:custNo', async (req, res) => {
     const r    = await doFetch('GET', `/api/v1/Customers/${encodeURIComponent(key)}?includeCustomFields=true&compact=true`);
     const body = await r.json();
     const d    = body.data || body;
-    if (d) console.log(`[customer-detail] ${key} phone keys:`, Object.keys(d).filter(k => /phone|mobile/i.test(k)));
     if (d && d.USER_BEST_PRICE_COD_CUST !== undefined) {
       d.best_price_code = d.USER_BEST_PRICE_COD_CUST || null;
     }

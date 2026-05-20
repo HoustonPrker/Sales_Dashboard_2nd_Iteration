@@ -239,10 +239,12 @@ function renderCA(cust, catData, mtd, orders) {
   const state     = cust.state || '—';
   const salesRep  = cust.salesRep || '—';
   const segment   = cust.categoryCode || '—';
-  const phone       = cust.phone1 || cust.phone || cust.phoneNumber || null;
-  const phone2      = cust.phone2 || null;
-  const email       = cust.email1 || cust.email || cust.emailAddress || null;
-  const phoneRole   = cust.contc_title_1 || cust.phone_label || null;
+  // Build contact list from NCR's two contact slots
+  const contacts = [
+    { name: cust.contact1, phone: cust.phone1, mobile: cust.mobilePhone1, email: cust.email1, url: cust.url1 },
+    { name: cust.contact2, phone: cust.phone2, mobile: cust.mobilePhone2, email: cust.email2, url: cust.url2 },
+  ].filter(c => c.name || c.phone || c.mobile || c.email);
+
   const rawDiscount = cust.best_price_code || cust.USER_BEST_PRICE_COD_CUST || null;
   const discountStr = (() => {
     if (!rawDiscount) return 'No Discount';
@@ -410,19 +412,23 @@ function renderCA(cust, catData, mtd, orders) {
         <span style="color:#1a2332;font-weight:600">${name}</span>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        ${phone ? `<a href="tel:${phone.replace(/\D/g,'')}" class="contact-pill" title="${phone}">
-          <svg class="cp-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.4 2 2 0 0 1 3.6 1.22h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.03z"/></svg>
-          <span>${phone}</span>
-          ${phoneRole ? `<span class="cp-meta">${phoneRole}</span>` : ''}
-        </a>` : ''}
-        ${phone2 ? `<a href="tel:${phone2.replace(/\D/g,'')}" class="contact-pill" title="${phone2}">
-          <svg class="cp-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.4 2 2 0 0 1 3.6 1.22h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.03z"/></svg>
-          <span>${phone2}</span>
-        </a>` : ''}
-        ${email ? `<a href="mailto:${email}" class="contact-pill" title="${email}">
-          <svg class="cp-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-          <span>${email}</span>
-        </a>` : ''}
+        ${contacts.map(c => {
+          const svgPhone  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.4 2 2 0 0 1 3.6 1.22h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.03z"/></svg>`;
+          const svgMobile = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>`;
+          const svgEmail  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>`;
+          const svgUrl    = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+          const row = (icon, href, label) => `<a href="${href}" style="display:flex;align-items:center;gap:4px;color:#3d5a80;text-decoration:none;font-size:12px;white-space:nowrap" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${icon}<span>${label}</span></a>`;
+          const lines = [
+            c.phone  ? row(svgPhone,  `tel:${c.phone.replace(/\D/g,'')}`,   c.phone)  : '',
+            c.mobile ? row(svgMobile, `tel:${c.mobile.replace(/\D/g,'')}`,  c.mobile) : '',
+            c.email  ? row(svgEmail,  `mailto:${c.email}`,                  c.email)  : '',
+            c.url    ? row(svgUrl,    c.url.startsWith('http') ? c.url : `https://${c.url}`, c.url) : '',
+          ].filter(Boolean).join('');
+          return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;display:flex;flex-direction:column;gap:4px;min-width:0">
+            ${c.name ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#1a2332;margin-bottom:2px">${c.name}</div>` : ''}
+            ${lines}
+          </div>`;
+        }).join('')}
         <button onclick="openProductListModal('${custNo.replace(/'/g,"\\'")}','${name.replace(/'/g,"\\'")}')"
           style="display:flex;align-items:center;gap:7px;background:#0d9488;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
