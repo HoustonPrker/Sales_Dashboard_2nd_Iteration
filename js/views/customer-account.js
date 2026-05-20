@@ -23,6 +23,7 @@ const tooltip = {
 
 async function loadCustomerAccount(custNo) {
   if (caAiCtrl) { caAiCtrl.abort(); caAiCtrl = null; }
+  caCloseContactPopover();
   resetCAState();
   caCustNo           = custNo;
   caDrill            = null;
@@ -244,6 +245,7 @@ function renderCA(cust, catData, mtd, orders) {
     { name: cust.contact1, phone: cust.phone1, mobile: cust.mobilePhone1, email: cust.email1, url: cust.url1 },
     { name: cust.contact2, phone: cust.phone2, mobile: cust.mobilePhone2, email: cust.email2, url: cust.url2 },
   ].filter(c => c.name || c.phone || c.mobile || c.email);
+  caSetContactData(contacts);
 
   const rawDiscount = cust.best_price_code || cust.USER_BEST_PRICE_COD_CUST || null;
   const discountStr = (() => {
@@ -411,23 +413,11 @@ function renderCA(cust, catData, mtd, orders) {
         <span style="color:#9ca3af;margin:0 8px">/</span>
         <span style="color:#1a2332;font-weight:600">${name}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        ${contacts.map(c => {
-          const svgPhone  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.4 2 2 0 0 1 3.6 1.22h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.03z"/></svg>`;
-          const svgMobile = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>`;
-          const svgEmail  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>`;
-          const svgUrl    = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
-          const row = (icon, href, label) => `<a href="${href}" style="display:flex;align-items:center;gap:4px;color:#3d5a80;text-decoration:none;font-size:12px;white-space:nowrap" onmouseover="this.style.color='#0d9488'" onmouseout="this.style.color='#3d5a80'">${icon}<span>${label}</span></a>`;
-          const lines = [
-            c.phone  ? row(svgPhone,  `tel:${c.phone.replace(/\D/g,'')}`,   c.phone)  : '',
-            c.mobile ? row(svgMobile, `tel:${c.mobile.replace(/\D/g,'')}`,  c.mobile) : '',
-            c.email  ? row(svgEmail,  `mailto:${c.email}`,                  c.email)  : '',
-            c.url    ? row(svgUrl,    c.url.startsWith('http') ? c.url : `https://${c.url}`, c.url) : '',
-          ].filter(Boolean).join('');
-          return `<div style="border-left:3px solid #3d5a80;padding:4px 10px;display:flex;flex-direction:column;gap:3px;min-width:0">
-            ${c.name ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#1a2332">${c.name}</div>` : ''}
-            ${lines}
-          </div>`;
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        ${contacts.map((c, i) => {
+          const label = (c.name || 'Contact').trim();
+          const display = label.length > 24 ? label.slice(0, 23).trimEnd() + '…' : label;
+          return `<button class="ca-contact-chip" data-contact-idx="${i}" onclick="caToggleContactPopover(this,${i})" aria-haspopup="dialog" aria-expanded="false" style="display:inline-flex;align-items:center;gap:5px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:999px;padding:5px 12px;font-size:12px;font-weight:500;color:#1a2332;cursor:pointer;font-family:inherit;white-space:nowrap;transition:background 0.12s" onmouseover="this.style.background='#e2e8f0'" onmouseout="if(!this.classList.contains('ca-chip-active'))this.style.background='#f1f5f9'">${display}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.5;flex-shrink:0"><polyline points="6 9 12 15 18 9"/></svg></button>`;
         }).join('')}
         <button onclick="openProductListModal('${custNo.replace(/'/g,"\\'")}','${name.replace(/'/g,"\\'")}')"
           style="display:flex;align-items:center;gap:7px;background:#0d9488;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;flex-shrink:0">
@@ -1285,6 +1275,105 @@ function printCatTable() {
     area.innerHTML = '';
     document.body.classList.remove('ca-print-mode');
   }, 1000);
+}
+
+// ── Contact chip popover ──────────────────────────────────────
+
+let _caContactData = [];  // set when contact chips are rendered
+let _caPopoverOpen = -1;  // index of currently open popover, -1 if closed
+
+function caSetContactData(contacts) { _caContactData = contacts; }
+
+function caToggleContactPopover(chip, idx) {
+  if (_caPopoverOpen === idx) {
+    caCloseContactPopover();
+    return;
+  }
+  caCloseContactPopover();
+
+  const c = _caContactData[idx];
+  if (!c) return;
+
+  _caPopoverOpen = idx;
+  chip.classList.add('ca-chip-active');
+  chip.style.background = '#e2e8f0';
+  chip.setAttribute('aria-expanded', 'true');
+
+  const svgPhone  = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.4 2 2 0 0 1 3.6 1.22h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.77a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.03z"/></svg>`;
+  const svgMobile = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>`;
+  const svgEmail  = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>`;
+  const svgUrl    = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+
+  const link = (href, text) =>
+    `<a href="${href}" style="color:#3d5a80;text-decoration:none;font-size:13px" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${text}</a>`;
+
+  const row = (icon, href, text, label) =>
+    `<div style="display:flex;align-items:center;gap:8px;padding:5px 0">
+      <span style="color:#6b7280;flex-shrink:0">${icon}</span>
+      <span style="display:flex;flex-direction:column;min-width:0">
+        ${link(href, text)}
+        ${label ? `<span style="font-size:11px;color:#9ca3af">${label}</span>` : ''}
+      </span>
+    </div>`;
+
+  const rows = [
+    c.phone  ? row(svgPhone,  `tel:+1${c.phone.replace(/\D/g,'')}`,   c.phone,  'Phone')  : '',
+    c.mobile ? row(svgMobile, `tel:+1${c.mobile.replace(/\D/g,'')}`,  c.mobile, 'Mobile') : '',
+    c.email  ? row(svgEmail,  `mailto:${c.email}`,                    c.email,  '')       : '',
+    c.url    ? row(svgUrl,    c.url.startsWith('http') ? c.url : `https://${c.url}`, c.url, '') : '',
+  ].filter(Boolean).join('');
+
+  const pop = document.createElement('div');
+  pop.id = 'ca-contact-popover';
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', `${c.name || 'Contact'} details`);
+  pop.style.cssText = 'position:fixed;z-index:9999;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:14px 16px;width:280px;font-family:inherit';
+  pop.innerHTML = `
+    <div style="font-size:13px;font-weight:700;color:#1a2332;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #f1f5f9">${c.name || 'Contact'}</div>
+    ${rows || '<div style="font-size:12px;color:#9ca3af">No contact details available.</div>'}`;
+
+  document.body.appendChild(pop);
+
+  // Position below chip, flip above if not enough room
+  const rect = chip.getBoundingClientRect();
+  const spaceBelow = window.innerHeight - rect.bottom;
+  if (spaceBelow >= 180 || spaceBelow > window.innerHeight - rect.top) {
+    pop.style.top  = `${rect.bottom + 6}px`;
+  } else {
+    pop.style.top  = `${rect.top - pop.offsetHeight - 6}px`;
+  }
+  const left = Math.min(rect.left, window.innerWidth - 296);
+  pop.style.left = `${Math.max(8, left)}px`;
+
+  // Close on outside click or Esc
+  setTimeout(() => {
+    document.addEventListener('mousedown', caPopoverOutsideClick);
+    document.addEventListener('keydown', caPopoverEsc);
+  }, 0);
+}
+
+function caPopoverOutsideClick(e) {
+  const pop = document.getElementById('ca-contact-popover');
+  if (pop && !pop.contains(e.target) && !e.target.closest('.ca-contact-chip')) {
+    caCloseContactPopover();
+  }
+}
+
+function caPopoverEsc(e) {
+  if (e.key === 'Escape') caCloseContactPopover();
+}
+
+function caCloseContactPopover() {
+  const pop = document.getElementById('ca-contact-popover');
+  if (pop) pop.remove();
+  document.querySelectorAll('.ca-contact-chip').forEach(btn => {
+    btn.classList.remove('ca-chip-active');
+    btn.style.background = '#f1f5f9';
+    btn.setAttribute('aria-expanded', 'false');
+  });
+  _caPopoverOpen = -1;
+  document.removeEventListener('mousedown', caPopoverOutsideClick);
+  document.removeEventListener('keydown', caPopoverEsc);
 }
 
 function removeDrillTitleBar() {
