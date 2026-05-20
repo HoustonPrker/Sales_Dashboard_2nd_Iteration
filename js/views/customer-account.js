@@ -1370,7 +1370,7 @@ function renderItemDrill() {
     </tr>` : '';
 
     tableHTML = `<table class="data-table">
-      <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
+      <thead style="position:sticky;top:44px;z-index:2;background:#3d5a80"><tr>
         ${th('rank',        '#',         'num-ctr')}
         ${th('status',      'Stat',      'num-ctr')}
         ${th('itemNo',      'Item #',    'num-ctr')}
@@ -1412,7 +1412,7 @@ function renderItemDrill() {
     </tr>` : '';
 
     tableHTML = `<table class="data-table">
-      <thead style="position:sticky;top:0;z-index:2;background:#fff"><tr>
+      <thead style="position:sticky;top:44px;z-index:2;background:#3d5a80"><tr>
         ${th('rank',        '#',             'num-ctr')}
         ${th('status',      'Stat',          'num-ctr')}
         ${th('itemNo',      'Item #',        'num-ctr')}
@@ -1437,7 +1437,7 @@ function renderItemDrill() {
         <button onclick="caDrillSwapTab('best')" style="${btnBest}">Best Sellers (${topItems.length})</button>
       </div>
     </div>
-    <div class="inv-wrap" style="margin:0">${tableHTML}</div>`;
+    <div class="inv-wrap" style="margin:0;overflow:visible">${tableHTML}</div>`;
 }
 
 function caDrillSortBy(col) {
