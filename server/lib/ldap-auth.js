@@ -7,7 +7,10 @@ const ldap = require('ldapjs');
 const LDAP_URL       = process.env.LDAP_URL       || '';
 const BIND_TEMPLATE  = process.env.LDAP_BIND_DN_TEMPLATE || '{username}@kellis.local';
 const LDAP_TLS       = process.env.LDAP_TLS === 'true';
-const LDAP_TLS_CERT  = process.env.LDAP_TLS_CERT  || '';  // path to CA cert (optional)
+const LDAP_TLS_CERT  = process.env.LDAP_TLS_CERT  || '';  // path to internal CA cert (preferred)
+// Set LDAP_TLS_REJECT_UNAUTHORIZED=false only while waiting for IT to provide the CA cert.
+// Remove once LDAP_TLS_CERT is configured.
+const REJECT_UNAUTH  = process.env.LDAP_TLS_REJECT_UNAUTHORIZED !== 'false';
 
 // AD sAMAccountName: 1–20 chars, letters/digits/dot/underscore/hyphen only.
 // Rejects all LDAP special chars (*, (, ), \, NUL) and spaces.
@@ -28,7 +31,7 @@ async function validateLDAP(username, password) {
   return new Promise((resolve, reject) => {
     const tlsOptions = LDAP_TLS
       ? {
-          rejectUnauthorized: true,
+          rejectUnauthorized: REJECT_UNAUTH,
           ...(LDAP_TLS_CERT ? { ca: [require('fs').readFileSync(LDAP_TLS_CERT)] } : {}),
         }
       : undefined;
