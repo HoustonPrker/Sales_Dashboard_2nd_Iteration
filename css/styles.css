@@ -185,7 +185,7 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 /* Left column: natural content height — never stretched */
 #ca-cat-panel { min-width: 0; }
 #ca-cat-panel .card { display: flex; flex-direction: column; min-width: 0; }
-#ca-cat-panel .inv-wrap { overflow: visible; }
+#ca-cat-panel .inv-wrap { overflow-y: auto; max-height: 520px; }
 
 /* Right column: height set by JS to match left; two peer cards fill it via flex */
 #ca-right-col { overflow: hidden; }
