@@ -778,9 +778,17 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
 
 /* ── PRINT / PDF (order detail) ──────────────── */
 @media print {
+  /* Customer account category print: hide everything except the injected area */
+  body.ca-print-mode > *:not(#ca-print-area) { display: none !important; }
+  body.ca-print-mode #ca-print-area { display: block !important; }
+
   /* Hide everything except the order detail panel */
-  .nav-bar, .tab-bar, .main-content > *:not(#tab-item),
-  #tab-accounts, #tab-leaderboard, #tab-ip,
+  body:not(.ca-print-mode) .nav-bar,
+  body:not(.ca-print-mode) .tab-bar,
+  body:not(.ca-print-mode) .main-content > *:not(#tab-item),
+  body:not(.ca-print-mode) #tab-accounts,
+  body:not(.ca-print-mode) #tab-leaderboard,
+  body:not(.ca-print-mode) #tab-ip,
   #acct-ai-tab, #ca-ai-tab, #acct-ai-overlay, #ca-ai-overlay,
   #acct-ai-drawer, #ca-ai-drawer,
   .od-no-print { display: none !important; }

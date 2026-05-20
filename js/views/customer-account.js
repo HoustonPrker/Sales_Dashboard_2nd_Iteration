@@ -1109,27 +1109,36 @@ function exportCatCSV() {
   if (!data.length) return;
   const custName = (window.caLastCust && (window.caLastCust.name || window.caLastCust.custNo)) || caCustNo || 'account';
   const headers  = ['Category', 'Current YTD $', 'Curr Qty', 'Prior YTD $', 'Prior Qty', '$ Change', '% Change'];
-  const esc      = v => `"${String(v).replace(/"/g, '""')}"`;
-  const rows = data.map(c => {
-    const pctChg = c.priorYtdAmt > 0 ? ((c.currentYtdAmt - c.priorYtdAmt) / c.priorYtdAmt * 100).toFixed(1) + '%' : '—';
+  const dataRows = data.map(c => {
+    const pctChg = c.priorYtdAmt > 0 ? ((c.currentYtdAmt - c.priorYtdAmt) / c.priorYtdAmt * 100).toFixed(1) + '%' : '-';
     return [
-      esc(c.description || c.categoryCode),
+      c.description || c.categoryCode,
       c.currentYtdAmt.toFixed(2),
       Math.round(c.currentQty || 0),
       c.priorYtdAmt.toFixed(2),
       Math.round(c.priorQty || 0),
       (c.dollarChange >= 0 ? '+' : '') + c.dollarChange.toFixed(2),
       pctChg,
-    ].join(',');
+    ];
   });
-  const csv = [headers.join(','), ...rows].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = `${custName.replace(/[^a-z0-9]/gi, '_')}_categories.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+
+  const XS = typeof XLSXStyle !== 'undefined' ? XLSXStyle : XLSX;
+  const ws = XS.utils.aoa_to_sheet([headers, ...dataRows]);
+
+  const maxLens = headers.map((h, ci) => {
+    const colVals = [h, ...dataRows.map(r => String(r[ci] ?? ''))];
+    return Math.max(...colVals.map(v => v.length));
+  });
+  ws['!cols'] = maxLens.map(w => ({ wch: Math.min(w + 2, 60) }));
+
+  headers.forEach((_, ci) => {
+    const addr = XS.utils.encode_cell({ r: 0, c: ci });
+    if (ws[addr]) ws[addr].s = { font: { bold: true }, fill: { fgColor: { rgb: 'D8D8D8' }, patternType: 'solid' }, alignment: { horizontal: 'center' } };
+  });
+
+  const wb = XS.utils.book_new();
+  XS.utils.book_append_sheet(wb, ws, custName.slice(0, 31));
+  XS.writeFile(wb, `${custName.replace(/[^a-z0-9]/gi, '_')}_categories.xlsx`);
 }
 
 function printCatTable() {
@@ -1243,8 +1252,12 @@ function printCatTable() {
       </table>
     </div>`;
 
+  document.body.classList.add('ca-print-mode');
   window.print();
-  setTimeout(() => { area.innerHTML = ''; }, 1000);
+  setTimeout(() => {
+    area.innerHTML = '';
+    document.body.classList.remove('ca-print-mode');
+  }, 1000);
 }
 
 // ── Item drill-down ───────────────────────────────────────────
