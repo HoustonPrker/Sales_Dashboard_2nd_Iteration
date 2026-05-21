@@ -219,7 +219,11 @@ input[type=file] { width: 100%; font-family: inherit; font-size: 13px; border: 1
 .acct-grid-wrap { overflow: visible; min-height: 200px; }
 /* Horizontal scroll lives on an inner wrapper — overflow-y:clip avoids creating
    a new vertical scroll container (which would break the sticky thead) */
-.acct-h-scroll { overflow-x: auto; overflow-y: clip; width: 100%; }
+.acct-h-scroll { overflow-x: scroll; overflow-y: clip; width: 100%; }
+.acct-h-scroll::-webkit-scrollbar { height: 10px; }
+.acct-h-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 0 0 6px 6px; }
+.acct-h-scroll::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 6px; border: 2px solid #f1f5f9; }
+.acct-h-scroll::-webkit-scrollbar-thumb:hover { background: #64748b; }
 /* Fixed-height, flex-layout headers for the accounts table */
 .acct-grid-wrap .data-table th { height: 46px; padding: 0; white-space: normal; vertical-align: middle; min-width: 52px; letter-spacing: 0.4px; position: sticky; top: 0; z-index: 4; background: #3d5a80; }
 .acct-grid-wrap .data-table th .th-inner { display: flex; align-items: center; height: 100%; padding: 0 6px 0 4px; gap: 3px; }
@@ -640,6 +644,151 @@ th.sort-th.sort-active .sort-icon { opacity: 1; }
   font-size: 12px;
   color: rgba(255,255,255,0.8);
   margin-top: auto;
+}
+
+/* ── Account Performance top filter bar ───────────────────────── */
+#acct-top-filter-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e5e7eb;
+  flex-wrap: wrap;
+}
+.tf-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tf-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+.tf-select {
+  height: 32px;
+  min-width: 160px;
+  max-width: 240px;
+  padding: 0 28px 0 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #1a2332;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239ca3af'/%3E%3C/svg%3E") no-repeat right 10px center;
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.tf-select:focus { outline: none; border-color: #0f766e; }
+.tf-select[value]:not([value=""]) { border-color: #0f766e; font-weight: 600; }
+.tf-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 2px;
+  margin-left: auto;
+}
+.tf-count {
+  font-size: 13px;
+  color: #6b7280;
+}
+.tf-clear {
+  font-size: 13px;
+  color: #6b7280;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.tf-clear:hover { color: #dc2626; text-decoration: underline; }
+
+/* Filters group inside the KPI ribbon */
+.kpi-filters-card {
+  flex: 0 0 200px;
+  min-width: 0;
+  width: 200px;
+}
+.kpi-filters-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.tf-group-ribbon {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.tf-select-ribbon {
+  height: 28px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 22px 0 7px;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 5px;
+  font-size: 11px;
+  font-family: inherit;
+  color: #e5e7eb;
+  background: rgba(255,255,255,0.1) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23cbd5e1'/%3E%3C/svg%3E") no-repeat right 7px center;
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  background-color: rgba(255,255,255,0.1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tf-select-ribbon:focus { outline: none; border-color: rgba(255,255,255,0.5); }
+.tf-select-ribbon option { background: #1e3a5f; color: #e5e7eb; }
+.tf-count-ribbon {
+  font-size: 10px;
+  color: rgba(255,255,255,0.55);
+  white-space: nowrap;
+  line-height: 1.2;
+}
+.tf-clear-ribbon {
+  font-size: 10px;
+  color: rgba(255,255,255,0.5);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.tf-clear-ribbon:hover { color: #fca5a5; text-decoration: underline; }
+
+/* KPI group cards — Annual / Monthly / Other */
+.kpi-group-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 10px;
+  padding: 10px 12px 12px;
+}
+.kpi-group-label {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #ffffff;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.kpi-group-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  flex: 1;
+}
+.kpi-group-grid .mgr-pill {
+  min-height: 0;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.07);
+  border-color: rgba(255,255,255,0.1);
 }
 
 /* KPI info tooltip */

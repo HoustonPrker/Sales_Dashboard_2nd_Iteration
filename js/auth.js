@@ -28,7 +28,13 @@ function renderNavUser(user) {
   const roleBg = user.is_super_admin ? '#b91c1c'
     : { admin: '#7c3aed', manager: '#0d9488', advisor: '#3d5a80', customer_service: '#b45309' }[user.role] || '#6b7280';
   const gearBtn = user.role === 'admin' ? `
-    <a href="/admin/users" title="Account Manager" style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:5px;background:rgba(255,255,255,0.1);color:#cbd5e1;text-decoration:none;font-size:15px;transition:background 0.15s" onmouseover="this.style.background='rgba(255,255,255,0.2)'" onmouseout="this.style.background='rgba(255,255,255,0.1)'">⚙</a>
+    <div style="position:relative;display:inline-flex" id="ks-gear-wrap">
+      <button onclick="ksGearToggle(event)" title="Settings" style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:5px;background:rgba(255,255,255,0.1);color:#cbd5e1;border:none;font-size:15px;cursor:pointer;font-family:inherit;transition:background 0.15s" onmouseover="this.style.background='rgba(255,255,255,0.2)'" onmouseout="this.style.background='rgba(255,255,255,0.1)'">⚙</button>
+      <div id="ks-gear-menu" style="display:none;position:absolute;top:34px;right:0;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.12);min-width:180px;z-index:9999;overflow:hidden">
+        <a href="/admin/users" style="display:block;padding:10px 14px;font-size:13px;font-weight:500;color:#1a2332;text-decoration:none;border-bottom:1px solid #f1f5f9" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">Account Manager</a>
+        <a href="/admin/monthly-goal" style="display:block;padding:10px 14px;font-size:13px;font-weight:500;color:#1a2332;text-decoration:none" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">Set Monthly Goal</a>
+      </div>
+    </div>
   ` : '';
   el.innerHTML = `
     <span style="font-size:13px;color:#cbd5e1">${user.displayName}</span>
@@ -86,6 +92,24 @@ function hideViewAsBanner() {
   const user = getKsUser();
   const rpBtn = document.getElementById('tab-btn-rp');
   if (rpBtn) rpBtn.style.display = ['manager', 'admin'].includes(user?.role) ? '' : 'none';
+}
+
+function ksGearToggle(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('ks-gear-menu');
+  if (!menu) return;
+  const open = menu.style.display !== 'none';
+  menu.style.display = open ? 'none' : 'block';
+  if (!open) {
+    const close = (ev) => {
+      const wrap = document.getElementById('ks-gear-wrap');
+      if (wrap && !wrap.contains(ev.target)) {
+        menu.style.display = 'none';
+        document.removeEventListener('click', close);
+      }
+    };
+    document.addEventListener('click', close);
+  }
 }
 
 async function ksLogout() {

@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monthly Goal Settings — Kellis Sales</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #1a2332; min-height: 100vh; }
+
+    /* ── Nav ── */
+    .am-nav { background: #1a2332; height: 52px; display: flex; align-items: center; padding: 0 20px; gap: 16px; }
+    .am-nav-brand { font-size: 15px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; text-decoration: none; }
+    .am-nav-logo { width: 28px; height: 28px; background: #3d5a80; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; }
+    .am-nav-sep { color: rgba(255,255,255,0.3); font-size: 18px; }
+    .am-nav-title { font-size: 14px; color: #94a3b8; font-weight: 500; }
+    .am-nav-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+    .am-nav-user { font-size: 13px; color: #cbd5e1; }
+    .am-nav-back { font-size: 12px; color: #94a3b8; text-decoration: none; padding: 4px 10px; border-radius: 5px; background: rgba(255,255,255,0.08); transition: background 0.15s; }
+    .am-nav-back:hover { background: rgba(255,255,255,0.15); color: #fff; }
+
+    /* ── Layout ── */
+    .am-body { max-width: 900px; margin: 0 auto; padding: 32px 24px 80px; }
+
+    /* ── Page header ── */
+    .am-header { margin-bottom: 28px; }
+    .am-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #64748b; margin-bottom: 6px; }
+    .am-page-title { font-size: 26px; font-weight: 700; color: #1a2332; }
+    .am-page-sub { font-size: 14px; color: #64748b; margin-top: 4px; }
+
+    /* ── Add / edit card ── */
+    .mg-card { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.07); padding: 24px 28px; margin-bottom: 24px; }
+    .mg-card-title { font-size: 14px; font-weight: 700; color: #1a2332; margin-bottom: 18px; }
+
+    .mg-form-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+    .mg-field { display: flex; flex-direction: column; gap: 6px; }
+    .mg-field label { font-size: 12px; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: 0.06em; }
+    .mg-field input, .mg-field select { border: 1px solid #e2e8f0; border-radius: 7px; padding: 9px 12px; font-size: 14px; font-family: inherit; color: #1a2332; background: #fafafa; outline: none; transition: border-color 0.15s; }
+    .mg-field input:focus, .mg-field select:focus { border-color: #0f766e; background: #fff; }
+    .mg-field-month { min-width: 140px; }
+    .mg-field-pct { min-width: 120px; }
+    .mg-field-note { flex: 1; min-width: 200px; }
+
+    .pct-wrap { position: relative; }
+    .pct-wrap input { padding-right: 28px; }
+    .pct-suffix { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 14px; color: #94a3b8; pointer-events: none; }
+
+    .btn-primary { background: #0f766e; color: #fff; border: none; border-radius: 8px; padding: 9px 20px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: background 0.15s; white-space: nowrap; }
+    .btn-primary:hover { background: #0d6460; }
+    .btn-primary:disabled { background: #94a3b8; cursor: not-allowed; }
+
+    /* ── Toast ── */
+    #mg-toast { display: none; padding: 10px 16px; border-radius: 7px; font-size: 13px; font-weight: 500; margin-bottom: 20px; }
+    #mg-toast.success { display: block; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+    #mg-toast.error   { display: block; background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+
+    /* ── Table ── */
+    .mg-section { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.07); overflow: hidden; }
+    .mg-section-head { padding: 16px 24px 0; border-bottom: 1px solid #f1f5f9; }
+    .mg-section-title { font-size: 14px; font-weight: 700; color: #1a2332; padding-bottom: 14px; }
+
+    .mg-table { width: 100%; border-collapse: collapse; }
+    .mg-table th { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: #64748b; padding: 10px 20px; text-align: left; background: #fafbfc; border-bottom: 1px solid #f1f5f9; }
+    .mg-table th.num { text-align: right; }
+    .mg-table td { padding: 13px 20px; font-size: 14px; border-bottom: 1px solid #f8f9fb; vertical-align: middle; }
+    .mg-table tbody tr:last-child td { border-bottom: none; }
+    .mg-table tbody tr:hover td { background: #f8fafc; }
+
+    .mg-month-badge { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; font-weight: 600; color: #3d5a80; }
+    .mg-pct-val { font-size: 15px; font-weight: 700; color: #0f766e; text-align: right; }
+    .mg-pct-val.custom { color: #0f766e; }
+    .mg-pct-val.default { color: #94a3b8; font-weight: 500; }
+    .mg-note-cell { font-size: 12px; color: #64748b; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mg-meta { font-size: 11px; color: #94a3b8; }
+    .mg-actions { display: flex; gap: 6px; }
+    .btn-sm { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 6px; border: none; cursor: pointer; font-family: inherit; transition: background 0.12s; }
+    .btn-edit { background: #f1f5f9; color: #475569; }
+    .btn-edit:hover { background: #e2e8f0; }
+    .btn-del { background: #fee2e2; color: #b91c1c; }
+    .btn-del:hover { background: #fecaca; }
+
+    .mg-empty { padding: 40px 24px; text-align: center; color: #94a3b8; font-size: 14px; }
+
+    /* ── Default notice ── */
+    .mg-default-notice { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: #92400e; margin-bottom: 24px; }
+  </style>
+</head>
+<body>
+
+<nav class="am-nav">
+  <a href="/" class="am-nav-brand">
+    <div class="am-nav-logo">K</div>
+    Kellis Sales
+  </a>
+  <span class="am-nav-sep">/</span>
+  <span class="am-nav-title">Monthly Goal Settings</span>
+  <div class="am-nav-right">
+    <span class="am-nav-user" id="nav-who"></span>
+    <a href="/" class="am-nav-back">← Back to Console</a>
+  </div>
+</nav>
+
+<div class="am-body">
+  <div class="am-header">
+    <div class="am-eyebrow">Admin Settings</div>
+    <div class="am-page-title">Monthly Goal %</div>
+    <div class="am-page-sub">Set the monthly sales growth target for each month. The KPI ribbon uses this to compute the Monthly Goal and Run Rate.</div>
+  </div>
+
+  <div id="mg-toast"></div>
+
+  <div class="mg-default-notice" id="mg-default-notice" style="display:none">
+    <strong>Default rate active:</strong> months without a custom entry use the default growth rate (<span id="default-pct-display">—</span>%).
+  </div>
+
+  <!-- Add / Edit form -->
+  <div class="mg-card">
+    <div class="mg-card-title" id="form-card-title">Set Goal for a Month</div>
+    <div class="mg-form-row">
+      <div class="mg-field mg-field-month">
+        <label for="f-month">Month</label>
+        <input type="month" id="f-month" min="2024-01" max="2030-12">
+      </div>
+      <div class="mg-field mg-field-pct">
+        <label for="f-pct">Growth Target</label>
+        <div class="pct-wrap">
+          <input type="number" id="f-pct" placeholder="5.8" step="0.01" min="-100" max="200">
+          <span class="pct-suffix">%</span>
+        </div>
+      </div>
+      <div class="mg-field mg-field-note">
+        <label for="f-note">Note <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <input type="text" id="f-note" placeholder="e.g. Adjusted for spring season" maxlength="120">
+      </div>
+      <button class="btn-primary" id="f-save-btn" onclick="saveGoal()">Save</button>
+      <button class="btn-primary" id="f-cancel-btn" onclick="cancelEdit()" style="display:none;background:#64748b">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Table of configured months -->
+  <div class="mg-section">
+    <div class="mg-section-head">
+      <div class="mg-section-title">Configured Months</div>
+    </div>
+    <table class="mg-table">
+      <thead>
+        <tr>
+          <th>Month</th>
+          <th class="num">Growth %</th>
+          <th>Note</th>
+          <th>Set By</th>
+          <th>Set At</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="mg-tbody">
+        <tr><td colspan="6"><div class="mg-empty">Loading…</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  let _settings = {};
+  let _editingMonth = null;
+
+  // ── Auth check ───────────────────────────────────────────────
+  (async function() {
+    const r = await fetch('/auth/me').catch(() => null);
+    if (!r || !r.ok) { window.location.href = '/login.html'; return; }
+    const u = await r.json();
+    if (u.role !== 'admin') { window.location.href = '/'; return; }
+    document.getElementById('nav-who').textContent = u.displayName;
+    loadSettings();
+  })();
+
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function fmtMonth(yyyyMM) {
+    const [y, m] = yyyyMM.split('-');
+    const names = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${names[parseInt(m,10)-1]} ${y}`;
+  }
+
+  async function loadSettings() {
+    const r = await fetch('/proxy/admin/monthly-goal-settings').catch(() => null);
+    if (!r || !r.ok) { showToast('error', 'Failed to load settings'); return; }
+    const data = await r.json();
+    _settings = data.settings || {};
+
+    // Show default notice
+    const defR = await fetch('/proxy/config').catch(() => null);
+    if (defR && defR.ok) {
+      const cfg = await defR.json();
+      const defPct = (cfg.defaultMonthlyGrowthPct ?? 0.05) * 100;
+      document.getElementById('default-pct-display').textContent = defPct.toFixed(1);
+      document.getElementById('mg-default-notice').style.display = '';
+    }
+
+    renderTable();
+  }
+
+  function renderTable() {
+    const tbody = document.getElementById('mg-tbody');
+    const entries = Object.entries(_settings).sort((a, b) => b[0].localeCompare(a[0]));
+    if (!entries.length) {
+      tbody.innerHTML = '<tr><td colspan="6"><div class="mg-empty">No custom months configured — all months use the default rate.</div></td></tr>';
+      return;
+    }
+    tbody.innerHTML = entries.map(([month, e]) => `
+      <tr>
+        <td><span class="mg-month-badge">${fmtMonth(month)}</span></td>
+        <td class="mg-pct-val custom">${e.monthly_increase_pct.toFixed(2)}%</td>
+        <td class="mg-note-cell" title="${escHtml(e.note || '')}">${escHtml(e.note || '—')}</td>
+        <td class="mg-meta">${escHtml(e.set_by || '—')}</td>
+        <td class="mg-meta">${fmtDate(e.set_at)}</td>
+        <td>
+          <div class="mg-actions">
+            <button class="btn-sm btn-edit" onclick="startEdit('${month}')">Edit</button>
+            <button class="btn-sm btn-del" onclick="deleteGoal('${month}')">Remove</button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function showToast(type, msg) {
+    const el = document.getElementById('mg-toast');
+    el.textContent = msg;
+    el.className = type;
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.className = ''; el.style.display = 'none'; el.textContent = ''; }, 4000);
+  }
+
+  function startEdit(month) {
+    _editingMonth = month;
+    const e = _settings[month];
+    document.getElementById('f-month').value = month;
+    document.getElementById('f-month').readOnly = true;
+    document.getElementById('f-pct').value = e.monthly_increase_pct;
+    document.getElementById('f-note').value = e.note || '';
+    document.getElementById('form-card-title').textContent = `Editing: ${fmtMonth(month)}`;
+    document.getElementById('f-save-btn').textContent = 'Update';
+    document.getElementById('f-cancel-btn').style.display = '';
+    document.getElementById('f-pct').focus();
+  }
+
+  function cancelEdit() {
+    _editingMonth = null;
+    document.getElementById('f-month').value = '';
+    document.getElementById('f-month').readOnly = false;
+    document.getElementById('f-pct').value = '';
+    document.getElementById('f-note').value = '';
+    document.getElementById('form-card-title').textContent = 'Set Goal for a Month';
+    document.getElementById('f-save-btn').textContent = 'Save';
+    document.getElementById('f-cancel-btn').style.display = 'none';
+  }
+
+  async function saveGoal() {
+    const month = document.getElementById('f-month').value.trim();
+    const pct   = document.getElementById('f-pct').value.trim();
+    const note  = document.getElementById('f-note').value.trim();
+
+    if (!month) { showToast('error', 'Select a month first'); return; }
+    if (pct === '' || isNaN(parseFloat(pct))) { showToast('error', 'Enter a valid growth percentage'); return; }
+
+    const btn = document.getElementById('f-save-btn');
+    btn.disabled = true;
+
+    const r = await fetch(`/proxy/admin/monthly-goal-settings/${month}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ monthly_increase_pct: parseFloat(pct), note }),
+    }).catch(() => null);
+
+    btn.disabled = false;
+
+    if (!r || !r.ok) {
+      const err = r ? (await r.json().catch(() => ({}))).error : 'Network error';
+      showToast('error', err || 'Failed to save');
+      return;
+    }
+
+    const data = await r.json();
+    _settings[month] = data.entry;
+    showToast('success', `Saved goal for ${fmtMonth(month)}: ${data.entry.monthly_increase_pct.toFixed(2)}%`);
+    cancelEdit();
+    renderTable();
+  }
+
+  async function deleteGoal(month) {
+    if (!confirm(`Remove the custom goal for ${fmtMonth(month)}? It will revert to the default rate.`)) return;
+    const r = await fetch(`/proxy/admin/monthly-goal-settings/${month}`, { method: 'DELETE' }).catch(() => null);
+    if (!r || !r.ok) { showToast('error', 'Failed to remove'); return; }
+    delete _settings[month];
+    showToast('success', `Removed custom goal for ${fmtMonth(month)}`);
+    renderTable();
+  }
+</script>
+</body>
+</html>

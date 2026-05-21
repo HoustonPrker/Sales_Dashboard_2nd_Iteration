@@ -5,6 +5,7 @@
 
 let odFilter = 'all';                        // 'all' | 'best' | 'new' | 'repeat'
 let odSort   = { col: 'ext', dir: 'desc' };  // col: 'item'|'cat'|'desc'|'qty'|'unit'|'ext'|'margin'
+let odShowMargin = false;                    // set per-render based on role
 let odSearch = '';
 let odCurrentLines = [];
 const odCharts = {};    // Chart.js instances
@@ -46,6 +47,8 @@ function renderOrderDetail(custNo, cust, order) {
   });
 
   odFilter = 'all'; odSort = { col: 'ext', dir: 'desc' }; odSearch = '';
+  const _u = typeof getKsUser === 'function' ? getKsUser() : null;
+  odShowMargin = !!_u && (_u.is_super_admin || ['admin', 'manager'].includes(_u.role));
 
   const custName = cust.name || order.custName || custNo;
   const ticketNo = order.ticketNo || '—';
@@ -173,9 +176,9 @@ function renderOrderDetail(custNo, cust, order) {
 
         <!-- KPI tiles 3×2 — flex:1 spreads tiles across available width -->
         <div id="od-kpi-grid" style="flex:1;display:flex;flex-direction:column;gap:10px;justify-content:center">
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+          <div style="display:grid;grid-template-columns:repeat(${odShowMargin ? 3 : 2},1fr);gap:10px">
             ${kpiTile('Order Total', fmt$(totExt), 'post-discount')}
-            ${kpiTile('Profit', fmt$(margin), marginPct.toFixed(1) + '% of order')}
+            ${odShowMargin ? kpiTile('Profit', fmt$(margin), marginPct.toFixed(1) + '% of order') : ''}
             ${kpiTile('vs Prior Order', vsPriorValue, vsPriorSub)}
           </div>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
@@ -344,10 +347,10 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
       <td class="num-ctr" style="padding:8px 12px;font-size:13px">${l.qty}</td>
       <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:#6b7280">${l.unitPrice > 0 ? f(l.unitPrice) : '—'}</td>
       <td class="num-ctr" style="padding:8px 12px;font-size:13px;font-weight:600">${l.extPrice > 0 ? f(l.extPrice) : '—'}</td>
-      <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:#1a2332">${l.unitCost > 0 ? f(lineMargin) : '—'}</td>
-      <td class="num-ctr" style="padding:8px 12px;font-size:13px;color:#1a2332">${lineMarginPct !== null && l.unitCost > 0 ? lineMarginPct.toFixed(1) + '%' : '—'}</td>
+      ${odShowMargin ? `<td class="num-ctr" style="padding:8px 12px;font-size:13px;color:#1a2332">${l.unitCost > 0 ? f(lineMargin) : '—'}</td>` : ''}
+      ${odShowMargin ? `<td class="num-ctr" style="padding:8px 12px;font-size:13px;color:#1a2332">${lineMarginPct !== null && l.unitCost > 0 ? lineMarginPct.toFixed(1) + '%' : '—'}</td>` : ''}
     </tr>`;
-  }).join('') || '<tr><td colspan="9" style="padding:24px;color:#9ca3af;text-align:center">No matching items.</td></tr>';
+  }).join('') || `<tr><td colspan="${odShowMargin ? 9 : 7}" style="padding:24px;color:#9ca3af;text-align:center">No matching items.</td></tr>`;
 
   // Sortable header helper — shows active column + direction indicator
   const thStyle = 'cursor:pointer;user-select:none;white-space:nowrap;';
@@ -374,8 +377,8 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
         ${th('qty',    'Qty',      'num-ctr')}
         ${th('unit',   'Unit $',   'num-ctr')}
         ${th('ext',    'Ext $',    'num-ctr')}
-        ${th('margin', 'Margin $', 'num-ctr')}
-        ${th('marginPct', 'Margin %', 'num-ctr')}
+        ${odShowMargin ? th('margin', 'Margin $', 'num-ctr') : ''}
+        ${odShowMargin ? th('marginPct', 'Margin %', 'num-ctr') : ''}
       </tr>
     </thead>
     <tbody>${tableRows}</tbody>
@@ -385,8 +388,8 @@ function odBuildTable(allLines, visibleLines, fmt$Fn) {
         <td class="num-ctr" style="${stickyTd};padding:10px 12px">${totQty}</td>
         <td style="${stickyTd};padding:10px 12px"></td>
         <td class="num-ctr" style="${stickyTd};padding:10px 12px">${f(totExt)}</td>
-        <td class="num-ctr" style="${stickyTd};padding:10px 12px;color:#1a2332">${totMargin !== 0 ? f(totMargin) : '—'}</td>
-        <td class="num-ctr" style="${stickyTd};padding:10px 12px;color:#1a2332">${totMarginPct !== null ? totMarginPct.toFixed(1) + '%' : '—'}</td>
+        ${odShowMargin ? `<td class="num-ctr" style="${stickyTd};padding:10px 12px;color:#1a2332">${totMargin !== 0 ? f(totMargin) : '—'}</td>` : ''}
+        ${odShowMargin ? `<td class="num-ctr" style="${stickyTd};padding:10px 12px;color:#1a2332">${totMarginPct !== null ? totMarginPct.toFixed(1) + '%' : '—'}</td>` : ''}
       </tr>
     </tfoot>
   </table>`;
@@ -494,21 +497,26 @@ function orderDetailExportCsv() {
   const d = panel && panel._orderData;
   if (!d || typeof XLSX === 'undefined') return;
 
-  const headers = ['Category', 'Description', 'Item #', 'Qty', 'Unit $', 'Ext $', 'Profit $', 'Profit %'];
+  const headers = odShowMargin
+    ? ['Category', 'Description', 'Item #', 'Qty', 'Unit $', 'Ext $', 'Profit $', 'Profit %']
+    : ['Category', 'Description', 'Item #', 'Qty', 'Unit $', 'Ext $'];
 
   const dataRows = (d.lines || []).map(l => {
     const profit    = (l.unitPrice - l.unitCost) * l.qty;
     const profitPct = l.extPrice > 0 ? +(profit / l.extPrice * 100).toFixed(1) : null;
-    return [
+    const row = [
       l.category    || '',
       l.description || '',
       l.itemNo      || '',
       l.qty         || 0,
       l.unitPrice   > 0 ? +l.unitPrice.toFixed(2) : '',
       l.extPrice    > 0 ? +l.extPrice.toFixed(2)  : '',
-      l.unitCost    > 0 ? +profit.toFixed(2)       : '',
-      profitPct     !== null && l.unitCost > 0 ? profitPct / 100 : '',
     ];
+    if (odShowMargin) {
+      row.push(l.unitCost > 0 ? +profit.toFixed(2) : '');
+      row.push(profitPct !== null && l.unitCost > 0 ? profitPct / 100 : '');
+    }
+    return row;
   });
 
   const XS = typeof XLSXStyle !== 'undefined' ? XLSXStyle : XLSX;
@@ -526,11 +534,13 @@ function orderDetailExportCsv() {
     if (ws[addr]) ws[addr].s = headerStyle;
   });
 
-  // Format Profit % column (col index 7) as percentage
-  dataRows.forEach((_, ri) => {
-    const addr = XS.utils.encode_cell({ r: ri + 1, c: 7 });
-    if (ws[addr] && ws[addr].v !== '') ws[addr].z = '0.0%';
-  });
+  // Format Profit % column as percentage (only present when margin visible)
+  if (odShowMargin) {
+    dataRows.forEach((_, ri) => {
+      const addr = XS.utils.encode_cell({ r: ri + 1, c: 7 });
+      if (ws[addr] && ws[addr].v !== '') ws[addr].z = '0.0%';
+    });
+  }
 
   // Auto-fit column widths based on max character length
   const allRows = [headers, ...dataRows];

@@ -24,8 +24,16 @@ const accountsCache = {};  // { [rep]: { data, ts } }
 const CACHE_TTL     = 15 * 60 * 1000;
 
 const diskCache = require('../lib/disk-cache');
-// Hydrate in-memory cache from disk on startup
-Object.assign(accountsCache, diskCache.load());
+// Hydrate in-memory cache from disk on startup.
+// Bust any cached entries that predate the cyTicketCount field (v2 schema).
+{
+  const loaded = diskCache.load();
+  for (const [key, entry] of Object.entries(loaded)) {
+    const sample = Array.isArray(entry.data) && entry.data[0];
+    if (sample && typeof sample.cyTicketCount === 'undefined') continue; // stale schema — skip
+    accountsCache[key] = entry;
+  }
+}
 
 // ── Best-seller % cache (30-min TTL) — keyed by rep ──────────
 // Decoupled from accountsCache so 498 per-customer line-item calls
@@ -247,7 +255,6 @@ async function buildAccountsData(repParam, repPrefix, cacheKey) {
       pyFullPromise,
     ]);
     console.log(`  customers+tickets: ${customers.length} customers, ${cyTickets.length} CY / ${pyTickets.length} PY / ${pyMonthTickets.length} pyMonth tickets in ${((Date.now()-t1)/1000).toFixed(2)}s`);
-    if (customers.length) console.log(`  [phone-debug] sample customer keys:`, Object.keys(customers[0]).filter(k => /phone|mobile|fax|alt/i.test(k)));
 
     // Keep customers with a sale in the last 24 months — excludes truly dormant/closed accounts
     const cutoff = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -322,13 +329,14 @@ async function buildAccountsData(repParam, repPrefix, cacheKey) {
 
     // 2. Aggregate ticket totals by custNo
     const salesMap = {};
-    const ensureEntry = c => { if (c) salesMap[c] = salesMap[c] || { ytd: 0, mtd: 0, prior: 0, priorMtd: 0, priorMonth: 0, monthGoal: 0 }; };
+    const ensureEntry = c => { if (c) salesMap[c] = salesMap[c] || { ytd: 0, mtd: 0, prior: 0, priorMtd: 0, priorMonth: 0, monthGoal: 0, cyTicketCount: 0 }; };
     for (const t of cyTickets) {
       const c = (t.CustNo || t.custNo || '').trim();
       ensureEntry(c);
       if (!c) continue;
       const amt = parseFloat(t.Total || t.total || 0);
       salesMap[c].ytd += amt;
+      salesMap[c].cyTicketCount++;
       const d = (t.BusinessDate || t.businessDate || '').slice(0, 10);
       if (d >= mtdStart) salesMap[c].mtd += amt;
     }
@@ -468,6 +476,7 @@ async function buildAccountsData(repParam, repPrefix, cacheKey) {
         pyBsUnits:      +(bs.pyBsUnits  || 0).toFixed(0),
         pyTotalUnits:   +(bs.pyTotalUnits || 0).toFixed(0),
         pyBsPct:        (bs.pyTotalUnits || 0) > 0 ? +((bs.pyBsUnits || 0) / bs.pyTotalUnits).toFixed(4) : 0,
+        cyTicketCount:  s.cyTicketCount || 0,
       };
     });
 

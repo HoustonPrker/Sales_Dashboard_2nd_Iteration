@@ -9,6 +9,11 @@ let acctTierFilter = 'All';
 let acctRepFilter  = 'All';
 let acctViewCharts = {};
 
+// Top filter bar state (admin/manager only)
+let acctTopFilter    = { rep: '', state: '', category: '' };
+let acctTopScope     = null; // accountsData narrowed by top filter; null = use all
+let acctShowFilters  = false; // mirrors showTopFilter — set by renderAccountsOverview, read by renderOverviewKpis
+
 // ── Virtual scroll state ──────────────────────────────────────
 let vsRows       = [];   // current filtered+sorted row data
 let vsStart      = 0;    // index of first rendered row
@@ -365,28 +370,42 @@ function applyAcctFilters(list) {
   });
 }
 
+let _filterAnchorEl = null;
+
+function _positionFilterPanel(panel, anchorEl) {
+  const rect = anchorEl.getBoundingClientRect();
+  const pw   = 290;
+  panel.style.left = Math.min(rect.left, window.innerWidth - pw - 8) + 'px';
+  panel.style.top  = (rect.bottom + 4) + 'px';
+}
+
 function showColFilter(colId, event) {
   event.stopPropagation();
   // Toggle: clicking the same button again closes the panel
   if (acctFilterOpenId === colId) { closeColFilter(); return; }
   closeColFilter();
   acctFilterOpenId = colId;
-  _mountFilterPanel(colId, event.currentTarget.getBoundingClientRect());
+  _filterAnchorEl = event.currentTarget;
+  _mountFilterPanel(colId, _filterAnchorEl);
   setTimeout(() => document.addEventListener('mousedown', _onOutsideFilter), 0);
 }
 
-function _mountFilterPanel(colId, anchorRect) {
+function _mountFilterPanel(colId, anchorEl) {
   const type  = ACCT_FILTER_TYPES[colId] || 'text';
   const panel = document.createElement('div');
   panel.id    = 'acct-col-filter-panel';
   panel.className = 'acct-col-filter-panel';
   panel.innerHTML = _buildFilterHTML(colId, type);
   document.body.appendChild(panel);
-  const pw   = 290;
-  panel.style.left = Math.min(anchorRect.left, window.innerWidth - pw - 8) + 'px';
-  panel.style.top  = (anchorRect.bottom + 4) + 'px';
+  _positionFilterPanel(panel, anchorEl);
   const inp = panel.querySelector('.acf-text-inline') || panel.querySelector('input:not([type=checkbox])');
   if (inp) { inp.focus(); inp.select && inp.select(); }
+  // Reposition on scroll so panel tracks the sticky header
+  window._filterScrollHandler = () => {
+    const p = document.getElementById('acct-col-filter-panel');
+    if (p && _filterAnchorEl) _positionFilterPanel(p, _filterAnchorEl);
+  };
+  window.addEventListener('scroll', window._filterScrollHandler, true);
 }
 
 function _onOutsideFilter(e) {
@@ -400,6 +419,11 @@ function _onOutsideFilter(e) {
 function closeColFilter() {
   const p = document.getElementById('acct-col-filter-panel');
   if (p) p.remove();
+  if (window._filterScrollHandler) {
+    window.removeEventListener('scroll', window._filterScrollHandler, true);
+    window._filterScrollHandler = null;
+  }
+  _filterAnchorEl = null;
   acctFilterOpenId = null;
 }
 
@@ -407,10 +431,11 @@ function reopenActiveFilter() {
   if (!acctFilterOpenId) return;
   // Checklist panels anchor to the inline filter row chip
   const chip = document.querySelector(`.acft-row td[data-col-id="${acctFilterOpenId}"] .acft-chip-btn`);
-  if (chip) { _mountFilterPanel(acctFilterOpenId, chip.getBoundingClientRect()); return; }
+  if (chip) { _filterAnchorEl = chip; _mountFilterPanel(acctFilterOpenId, chip); return; }
   const btn = document.querySelector(`th[data-col-id="${acctFilterOpenId}"] .col-filter-btn`);
   if (!btn) { acctFilterOpenId = null; return; }
-  _mountFilterPanel(acctFilterOpenId, btn.getBoundingClientRect());
+  _filterAnchorEl = btn;
+  _mountFilterPanel(acctFilterOpenId, btn);
 }
 
 function _buildFilterHTML(colId, type) {
@@ -1171,11 +1196,130 @@ const acctTooltipDefaults = {
   bodyFont:  { family: 'Inter, sans-serif', size: 12 },
 };
 
+// ── Top filter helpers ────────────────────────────────────────
+
+function getTopScopeData() { return acctTopScope !== null ? acctTopScope : (accountsData || []); }
+
+function _computeTopScope() {
+  const { rep, state, category } = acctTopFilter;
+  if (!rep && !state && !category) { acctTopScope = null; return; }
+  let data = accountsData || [];
+  if (rep) data = data.filter(a => {
+    const r = (a.salesRep || '').trim().toUpperCase();
+    const prefix = r.includes('-') ? r.slice(0, r.indexOf('-')) : r;
+    return prefix === rep;
+  });
+  if (state)    data = data.filter(a => a.state === state);
+  if (category) data = data.filter(a => a.category === category);
+  acctTopScope = data;
+}
+
+function acctTopFilterChange() {
+  const repEl  = document.getElementById('tf-rep');
+  const stEl   = document.getElementById('tf-state');
+  const catEl  = document.getElementById('tf-cat');
+  acctTopFilter.rep      = repEl  ? repEl.value  : '';
+  acctTopFilter.state    = stEl   ? stEl.value   : '';
+  acctTopFilter.category = catEl  ? catEl.value  : '';
+  _computeTopScope();
+
+  // Dim KPIs while recalculating
+  const kpiEl = document.getElementById('acct-overview-kpis');
+  if (kpiEl) kpiEl.style.opacity = '0.4';
+
+  // Re-render KPIs and table from new scope
+  if (acctOverviewData) renderOverviewKpis();
+  renderAccountsOverview();
+
+  // Update count indicator
+  _updateTopFilterCount();
+}
+
+function acctTopFilterClear() {
+  acctTopFilter = { rep: '', state: '', category: '' };
+  acctTopScope  = null;
+  ['tf-rep','tf-state','tf-cat'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  if (acctOverviewData) renderOverviewKpis();
+  renderAccountsOverview();
+  _updateTopFilterCount();
+}
+
+function _updateTopFilterCount() {
+  const el = document.getElementById('tf-count');
+  if (!el) return;
+  const scope  = getTopScopeData();
+  const total  = (accountsData || []).length;
+  const active = acctTopScope !== null;
+  if (active) {
+    el.textContent = `${scope.length.toLocaleString()} of ${total.toLocaleString()} · Clear`;
+    el.style.color = '#6ee7b7';
+    el.style.fontWeight = '700';
+  } else {
+    el.textContent = '';
+  }
+}
+
+function renderTopFilterBar() {
+  const data = accountsData || [];
+
+  // Rep options — derive from advisors list if available, else from raw salesRep codes
+  const prefixSet = new Map();
+  data.forEach(a => {
+    const r = (a.salesRep || '').trim().toUpperCase();
+    const prefix = r.includes('-') ? r.slice(0, r.indexOf('-')) : r;
+    if (prefix) prefixSet.set(prefix, prefix);
+  });
+  if (acctAdvisors && acctAdvisors.length) {
+    acctAdvisors.forEach(adv => {
+      const p = (adv.rep_prefix || '').toUpperCase();
+      if (p) prefixSet.set(p, `${adv.displayName} (${p})`);
+    });
+  }
+  const repOpts = [...prefixSet.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([val, label]) => `<option value="${val}">${label}</option>`)
+    .join('');
+
+  // State options
+  const states = [...new Set(data.map(a => a.state || '').filter(Boolean))].sort();
+  const stateOpts = states.map(s => `<option value="${s}">${s}</option>`).join('');
+
+  // Category options
+  const cats = [...new Set(data.map(a => a.category || '').filter(Boolean))].sort();
+  const catOpts = cats.map(c => `<option value="${c}">${c}</option>`).join('');
+
+  const dd = (id, label, opts, val) => `
+    <div class="tf-group">
+      <label class="tf-label" for="${id}">${label}</label>
+      <select id="${id}" class="tf-select" onchange="acctTopFilterChange()">
+        <option value="">All ${label}s</option>
+        ${opts}
+      </select>
+    </div>`;
+
+  return `
+    <div id="acct-top-filter-bar">
+      ${dd('tf-rep',   'Rep',      repOpts,   acctTopFilter.rep)}
+      ${dd('tf-state', 'State',    stateOpts, acctTopFilter.state)}
+      ${dd('tf-cat',   'Category', catOpts,   acctTopFilter.category)}
+      <div class="tf-actions">
+        <span id="tf-count" class="tf-count"></span>
+        <a href="#" class="tf-clear" onclick="event.preventDefault();acctTopFilterClear()">Clear filters</a>
+      </div>
+    </div>`;
+}
+
 // ── Entry points (called by app.js) ──────────────────────────
 
 function renderStoreView() {
   if (!dataReady) return;
   initAcctLayout();
+  // Reset top filter when the view is freshly loaded (rep change, tab switch, etc.)
+  acctTopFilter = { rep: '', state: '', category: '' };
+  acctTopScope  = null;
   renderAccountsOverview();
   fetchRepOverview();
   // Show territory AI button (may be first render — switchTab won't have fired yet)
@@ -1218,33 +1362,34 @@ function renderOverviewKpis() {
   if (!el || !acctOverviewData) return;
   const d = acctOverviewData;
 
-  const totalAccounts = (accountsData || []).length;
+  // Use top-filtered scope when active, otherwise full accountsData
+  const scope = getTopScopeData();
+  const isFiltered = acctTopScope !== null;
+
+  const totalAccounts = scope.length;
   // For ALL admin view the server skips the large ticket-history queries and returns -1
   // as a sentinel. Derive these KPIs from accountsData which is already fully loaded.
   const isAllView = (typeof currentRep !== 'undefined') && currentRep === 'ALL';
-  const activeAccounts = (isAllView || d.monthly.activeAccounts < 0)
-    ? (accountsData || []).filter(a => a.daysSinceOrder >= 0 && a.daysSinceOrder < 180).length
+  const activeAccounts = (isAllView || isFiltered || d.monthly.activeAccounts < 0)
+    ? scope.filter(a => a.daysSinceOrder >= 0 && a.daysSinceOrder < 180).length
     : d.monthly.activeAccounts;
-  const mtdSales = (isAllView && d.monthly.mtd === 0)
-    ? (accountsData || []).reduce((s, a) => s + (a.mtdSales || 0), 0)
+  const mtdSales = (isAllView || isFiltered)
+    ? scope.reduce((s, a) => s + (a.mtdSales || 0), 0)
     : d.monthly.mtd;
-  const mtdActiveAccounts = d.monthly.mtdActiveAccounts ?? 0;
 
   const runRatePct   = (d.yearRunRate * 100).toFixed(1);
-  const totalBsUnits    = (accountsData || []).reduce((s, a) => s + (a.bsUnits    || 0), 0);
-  const totalAllUnits   = (accountsData || []).reduce((s, a) => s + (a.totalUnits || 0), 0);
-  const totalPyBsUnits  = (accountsData || []).reduce((s, a) => s + (a.pyBsUnits  || 0), 0);
-  const totalPyAllUnits = (accountsData || []).reduce((s, a) => s + (a.pyTotalUnits || 0), 0);
+  const totalBsUnits    = scope.reduce((s, a) => s + (a.bsUnits    || 0), 0);
+  const totalAllUnits   = scope.reduce((s, a) => s + (a.totalUnits || 0), 0);
+  const totalPyBsUnits  = scope.reduce((s, a) => s + (a.pyBsUnits  || 0), 0);
+  const totalPyAllUnits = scope.reduce((s, a) => s + (a.pyTotalUnits || 0), 0);
   const repBsPct        = totalAllUnits > 0 ? totalBsUnits / totalAllUnits : (d.bestSeller.pct || 0);
   const repPyBsPct      = totalPyAllUnits > 0 ? totalPyBsUnits / totalPyAllUnits : 0;
   const bsPct           = (repBsPct * 100).toFixed(1);
   const pyBsPct         = (repPyBsPct * 100).toFixed(1);
-  const activeAccPct = totalAccounts > 0 ? ((mtdActiveAccounts / totalAccounts) * 100).toFixed(0) : 0;
 
-
-  const totalYtd        = (accountsData || []).reduce((s, a) => s + a.ytdSales, 0);
-  const totalMonthGoal  = (accountsData || []).reduce((s, a) => s + (a.monthGoal || 0), 0);
-  const totalAnnualTarget = (accountsData || []).reduce((s, a) => s + (a.annualGoal || 0), 0);
+  const totalYtd        = scope.reduce((s, a) => s + a.ytdSales, 0);
+  const totalMonthGoal  = scope.reduce((s, a) => s + (a.monthGoal || 0), 0);
+  const totalAnnualTarget = scope.reduce((s, a) => s + (a.annualGoal || 0), 0);
   const annualPctRatio  = totalAnnualTarget > 0 ? totalYtd / totalAnnualTarget : 0;
   const annualPct       = (annualPctRatio * 100).toFixed(1);
   const mtdRatio     = totalMonthGoal > 0 ? mtdSales / totalMonthGoal : 0;
@@ -1256,6 +1401,16 @@ function renderOverviewKpis() {
   const gapToGoal    = totalMonthGoal - mtdSales;
   const dailyNeeded  = remainingBD > 0 && gapToGoal > 0 ? gapToGoal / remainingBD : 0;
   const dailyColor   = dailyNeeded > 0 ? '#d97706' : '#059669';
+
+  // Avg Order — use filtered scope when top filter is active
+  const totalCyTickets = scope.reduce((s, a) => s + (a.cyTicketCount || 0), 0);
+  const avgTicketValue = totalCyTickets > 0 ? totalYtd / totalCyTickets : 0;
+  // Lines-per-order: not available at account-list level when filtered; fall back to rep-overview
+  const avgTicketDisplay = isFiltered
+    ? (avgTicketValue > 0 ? fmt$(avgTicketValue) : '—')
+    : fmt$(d.avg.ticketCurrent);
+  const avgLinesDisplay  = isFiltered ? '' : d.avg.linesCurrent.toFixed(1) + ' lines';
+  const avgOrderSub      = isFiltered ? `${totalCyTickets.toLocaleString()} orders` : '';
 
   const ticketChg = d.avg.ticketPrior > 0
     ? ((d.avg.ticketCurrent - d.avg.ticketPrior) / d.avg.ticketPrior * 100).toFixed(1)
@@ -1269,6 +1424,10 @@ function renderOverviewKpis() {
   const linesChgStr = linesChg !== null
     ? (parseFloat(linesChg) >= 0 ? `<span style="color:#86efac">↑ +${linesChg}%</span>` : `<span style="color:#fca5a5">↓ ${linesChg}%</span>`)
     : '<span style="color:#94a3b8">—</span>';
+
+  const avgOrderTooltip  = isFiltered
+    ? `<strong>Avg Ticket (filtered):</strong> ${fmt$(avgTicketValue)}<br><strong>Orders:</strong> ${totalCyTickets.toLocaleString()}`
+    : `<strong>Avg Ticket</strong><br>CY: ${fmt$(d.avg.ticketCurrent)}<br>PY: ${d.avg.ticketPrior > 0 ? fmt$(d.avg.ticketPrior) : '—'}<br>Change: ${ticketChgStr}<br><br><strong>Avg Lines</strong><br>CY: ${d.avg.linesCurrent.toFixed(1)}<br>PY: ${d.avg.linesPrior > 0 ? d.avg.linesPrior.toFixed(1) : '—'}<br>Change: ${linesChgStr}`;
 
   const annualGrowthPct  = d.annualGrowthPct  != null ? (d.annualGrowthPct  * 100).toFixed(1) + '%' : '—';
   const monthlyGrowthPct = d.monthlyGrowthPct != null ? (d.monthlyGrowthPct * 100).toFixed(1) + '%' : '—';
@@ -1285,6 +1444,7 @@ function renderOverviewKpis() {
       ${sub ? `<div class="mgr-pill-sub">${sub}</div>` : ''}
     </div>`;
 
+  el.style.opacity = '';
   el.innerHTML = `
     <div class="mgr-panel">
       <div style="display:flex;gap:0;align-items:stretch">
@@ -1294,45 +1454,106 @@ function renderOverviewKpis() {
           <canvas id="acct-donut-chart" style="max-height:200px;cursor:pointer" title="Click a slice to filter by tier"></canvas>
         </div>
 
-        <!-- Right: 2-row KPI grid -->
-        <div style="flex:1;display:flex;flex-direction:column;gap:8px;padding:4px 0">
-          <!-- Row 1: Year Run Rate | Annual Goal | Month Run Rate | Monthly Goal $$ | Daily Needed | Active Accounts -->
-          <div class="mgr-pill-row">
-            <div class="mgr-pill">
-              <div class="mgr-pill-label">Year Run Rate</div>
-              <div class="mgr-pill-value">${runRatePct}%</div>
-              <div class="mgr-pill-sub">${d.businessDaysElapsed} of ${d.businessDaysTotal} days elapsed</div>
+        <!-- Right: Filters + 3 grouped KPI cards -->
+        <div style="flex:1;display:flex;gap:8px;padding:4px 0;align-items:stretch">
+
+          <!-- Filters group (admin/manager only) -->
+          ${acctShowFilters ? `
+          <div class="kpi-group-card kpi-filters-card">
+            <div class="kpi-group-label">Filters</div>
+            <div class="kpi-filters-grid">
+              <div class="tf-group tf-group-ribbon">
+                <label class="kpi-group-label" style="border:none;padding:0;margin-bottom:3px" for="tf-rep">Rep</label>
+                <select id="tf-rep" class="tf-select-ribbon" onchange="acctTopFilterChange()">
+                  <option value="">All Reps</option>
+                  ${(() => {
+                    const data = accountsData || [];
+                    const prefixSet = new Map();
+                    data.forEach(a => {
+                      const r = (a.salesRep || '').trim().toUpperCase();
+                      const prefix = r.includes('-') ? r.slice(0, r.indexOf('-')) : r;
+                      if (prefix) prefixSet.set(prefix, prefix);
+                    });
+                    if (acctAdvisors && acctAdvisors.length) {
+                      acctAdvisors.forEach(adv => {
+                        const p = (adv.rep_prefix || '').toUpperCase();
+                        if (p) prefixSet.set(p, adv.displayName + ' (' + p + ')');
+                      });
+                    }
+                    return [...prefixSet.entries()].sort((a,b)=>a[1].localeCompare(b[1])).map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
+                  })()}
+                </select>
+              </div>
+              <div class="tf-group tf-group-ribbon">
+                <label class="kpi-group-label" style="border:none;padding:0;margin-bottom:3px" for="tf-state">State</label>
+                <select id="tf-state" class="tf-select-ribbon" onchange="acctTopFilterChange()">
+                  <option value="">All States</option>
+                  ${[...new Set((accountsData||[]).map(a=>a.state||'').filter(Boolean))].sort().map(s=>`<option value="${s}">${s}</option>`).join('')}
+                </select>
+              </div>
+              <div class="tf-group tf-group-ribbon">
+                <label class="kpi-group-label" style="border:none;padding:0;margin-bottom:3px" for="tf-cat">Customer Type</label>
+                <select id="tf-cat" class="tf-select-ribbon" onchange="acctTopFilterChange()">
+                  <option value="">All Types</option>
+                  ${[...new Set((accountsData||[]).map(a=>a.category||'').filter(Boolean))].sort().map(c=>`<option value="${c}">${c}</option>`).join('')}
+                </select>
+              </div>
+              <a href="#" id="tf-count" class="tf-clear-ribbon" onclick="event.preventDefault();acctTopFilterClear()" style="margin-top:2px"></a>
             </div>
-            ${pill('Annual Goal', fmt$(totalAnnualTarget), `prior yr × ${annualGrowthPct}`, '', ANNUAL_GOAL_TOOLTIP)}
-            ${pill('Month Run Rate',
-              d.monthRunRate ? d.monthRunRate.pctElapsed.toFixed(1) + '%' : '—',
-              d.monthRunRate ? `${d.monthRunRate.elapsed} of ${d.monthRunRate.total} business days` : '',
-              '',
-              '<strong>Month Run Rate:</strong> business days elapsed ÷ total business days in the month<br><strong>Business day:</strong> Mon–Fri excluding US federal holidays')}
-            ${pill('Monthly Goal', fmt$(totalMonthGoal), `prior mo × ${monthlyGrowthPct}`, '', MONTHLY_GOAL_TOOLTIP)}
-            ${pill('Daily Needed', dailyNeeded > 0 ? fmt$(dailyNeeded) : '—', 'to close gap')}
-            ${pill('Active Accounts', `${activeAccounts} <span style="opacity:0.55;font-size:14px;font-weight:500">/ ${totalAccounts}</span>`, 'Last 6 months', '', '<strong>Active account:</strong> at least one order in the last 180 days')}
+          </div>
+          ` : ''}
+
+          <!-- Annual group -->
+          <div class="kpi-group-card">
+            <div class="kpi-group-label">Annual</div>
+            <div class="kpi-group-grid">
+              ${pill('Annual Goal', fmt$(totalAnnualTarget), `prior yr × ${annualGrowthPct}`, '', ANNUAL_GOAL_TOOLTIP)}
+              <div class="mgr-pill">
+                <div class="mgr-pill-label">Year Run Rate</div>
+                <div class="mgr-pill-value">${runRatePct}%</div>
+                <div class="mgr-pill-sub">${d.businessDaysElapsed} of ${d.businessDaysTotal} days elapsed</div>
+              </div>
+              ${pill('YTD Sales', fmt$(totalYtd), 'current year to date')}
+              ${pill('% to Annual Goal', `${annualPct}%`, fmt$(totalYtd) + ' YTD', '', `<strong>% to Annual Goal:</strong> YTD Sales ÷ Annual Goal<br><strong>YTD Sales:</strong> ${fmt$(totalYtd)}<br><strong>Annual Goal:</strong> ${fmt$(totalAnnualTarget)}`)}
+            </div>
           </div>
 
-          <!-- Row 2: % to Annual Target | YTD Sales | % to Monthly Target | MTD Sales | Avg Order | Best Sellers on PO -->
-          <div class="mgr-pill-row">
-            ${pill('% to Annual Target', `${annualPct}%`, fmt$(totalYtd) + ' YTD', '', `<strong>% to Annual Target:</strong> YTD Sales ÷ Annual Goal<br><strong>YTD Sales:</strong> ${fmt$(totalYtd)}<br><strong>Annual Goal:</strong> ${fmt$(totalAnnualTarget)}`)}
-            ${pill('YTD Sales', fmt$(totalYtd), 'current year to date')}
-            ${pill('% to Monthly Target', `${mtdPct}%`, 'of monthly goal')}
-            ${pill('MTD Sales', fmt$(mtdSales), `${d.monthly.remainingBusinessDays} biz days left`)}
-            ${pill('Avg Order',
-              `${fmt$(d.avg.ticketCurrent)}<br>${d.avg.linesCurrent.toFixed(1)} lines`,
-              '',
-              '',
-              `<strong>Avg Ticket</strong><br>CY: ${fmt$(d.avg.ticketCurrent)}<br>PY: ${d.avg.ticketPrior > 0 ? fmt$(d.avg.ticketPrior) : '—'}<br>Change: ${ticketChgStr}<br><br><strong>Avg Lines</strong><br>CY: ${d.avg.linesCurrent.toFixed(1)}<br>PY: ${d.avg.linesPrior > 0 ? d.avg.linesPrior.toFixed(1) : '—'}<br>Change: ${linesChgStr}`)}
-            ${(() => {
-              const bsChgPts = repPyBsPct > 0 ? (repBsPct - repPyBsPct) * 100 : null;
-              const bsChgStr = bsChgPts !== null
-                ? (bsChgPts >= 0 ? `<span style="color:#86efac">↑ +${bsChgPts.toFixed(1)} pts YoY</span>` : `<span style="color:#fca5a5">↓ ${bsChgPts.toFixed(1)} pts YoY</span>`)
-                : '<span style="color:#94a3b8">no prior yr data</span>';
-              return pill('Best Sellers on PO', bsPct + '%', `${totalBsUnits.toLocaleString()} of ${totalAllUnits.toLocaleString()} lines`, '', `<strong>Current Year:</strong> ${bsPct}%<br><strong>Prior Year:</strong> ${pyBsPct}%<br><strong>Change:</strong> ${bsChgStr}`);
-            })()}
+          <!-- Monthly group -->
+          <div class="kpi-group-card">
+            <div class="kpi-group-label">Monthly</div>
+            <div class="kpi-group-grid">
+              ${pill('Monthly Goal', fmt$(totalMonthGoal), `prior mo × ${monthlyGrowthPct}`, '', MONTHLY_GOAL_TOOLTIP)}
+              ${pill('Month Run Rate',
+                d.monthRunRate ? d.monthRunRate.pctElapsed.toFixed(1) + '%' : '—',
+                d.monthRunRate ? `${d.monthRunRate.elapsed} of ${d.monthRunRate.total} business days` : '',
+                '',
+                '<strong>Month Run Rate:</strong> business days elapsed ÷ total business days in the month<br><strong>Business day:</strong> Mon–Fri excluding US federal holidays')}
+              ${pill('MTD Sales', fmt$(mtdSales), `${d.monthly.remainingBusinessDays} biz days left`)}
+              ${pill('% to Monthly Goal', `${mtdPct}%`, 'of monthly goal')}
+            </div>
           </div>
+
+          <!-- Other group -->
+          <div class="kpi-group-card">
+            <div class="kpi-group-label">Other</div>
+            <div class="kpi-group-grid">
+              ${pill('Daily Needed', dailyNeeded > 0 ? fmt$(dailyNeeded) : '—', 'to close gap')}
+              ${pill('Active Accounts', `${activeAccounts} <span style="opacity:0.55;font-size:14px;font-weight:500">/ ${totalAccounts}</span>`, 'Last 6 months', '', '<strong>Active account:</strong> at least one order in the last 180 days')}
+              ${pill('Avg Order',
+                `${avgTicketDisplay}${avgLinesDisplay ? `<br><span style="font-size:14px;font-weight:500">${avgLinesDisplay}</span>` : ''}`,
+                avgOrderSub,
+                '',
+                avgOrderTooltip)}
+              ${(() => {
+                const bsChgPts = repPyBsPct > 0 ? (repBsPct - repPyBsPct) * 100 : null;
+                const bsChgStr = bsChgPts !== null
+                  ? (bsChgPts >= 0 ? `<span style="color:#86efac">↑ +${bsChgPts.toFixed(1)} pts YoY</span>` : `<span style="color:#fca5a5">↓ ${bsChgPts.toFixed(1)} pts YoY</span>`)
+                  : '<span style="color:#94a3b8">no prior yr data</span>';
+                return pill('Best Sellers', bsPct + '%', `${totalBsUnits.toLocaleString()} of ${totalAllUnits.toLocaleString()} lines`, '', `<strong>Current Year:</strong> ${bsPct}%<br><strong>Prior Year:</strong> ${pyBsPct}%<br><strong>Change:</strong> ${bsChgStr}`);
+              })()}
+            </div>
+          </div>
+
         </div>
 
       </div>
@@ -1340,6 +1561,14 @@ function renderOverviewKpis() {
 
   // Render donut now that the canvas is in the DOM
   renderAccountsDonut();
+
+  // Restore filter selections (dropdowns rebuilt inside ribbon HTML)
+  if (acctShowFilters) {
+    const r = document.getElementById('tf-rep');   if (r) r.value = acctTopFilter.rep;
+    const s = document.getElementById('tf-state'); if (s) s.value = acctTopFilter.state;
+    const c = document.getElementById('tf-cat');   if (c) c.value = acctTopFilter.category;
+    _updateTopFilterCount();
+  }
 }
 
 function renderAccountsDonut() {
@@ -1708,15 +1937,15 @@ function acftSelectOp(colId, type, op, event) {
 function renderAccountsOverview() {
   destroyStoreCharts();
 
-  const byRep = accountsData || [];
+  // Role-based rendering gates
+  const _u = typeof getKsUser === 'function' ? getKsUser() : null;
+  const showTopFilter = !!_u && (_u.is_super_admin || ['admin', 'manager'].includes(_u.role));
+  acctShowFilters = showTopFilter;
+  const showKpiRibbon = !_u || _u.role !== 'customer_service';
+  const isAdvisor     = !!_u && _u.role === 'advisor';
 
-  // KPIs
-  const total        = byRep.length;
-  const totalYtd     = byRep.reduce((s, a) => s + a.ytdSales,   0);
-  const behindTarget = byRep.filter(a => a.ytdSales < a.target && a.target > 0).length;
-  const noOrders30   = byRep.filter(a => a.daysSinceOrder >= 30).length;
-  const growing      = byRep.filter(a => a.ytdSales > a.priorYtd && a.priorYtd > 0).length;
-  const declining    = byRep.filter(a => a.ytdSales < a.priorYtd && a.priorYtd > 0).length;
+  // Top-filter scope: for admin/manager use acctTopScope; for advisor use full accountsData (server already scoped)
+  const byRep = getTopScopeData();
 
   const tierCounts = { All: byRep.length, Healthy: 0, Attention: 0, AtRisk: 0, Critical: 0 };
   byRep.forEach(a => tierCounts[a.tier] = (tierCounts[a.tier] || 0) + 1);
@@ -1735,7 +1964,8 @@ function renderAccountsOverview() {
   };
 
   // ── Table — dynamic column layout ───────────────────────────
-  const visCols = acctVisibleCols();
+  // For advisors, strip the rep column — server already scoped data, no rep variety to show
+  const visCols = acctVisibleCols().filter(c => !(isAdvisor && c.id === 'rep'));
   const colCount = visCols.length;
 
   const theadRow = visCols.map(col => {
@@ -1764,23 +1994,23 @@ function renderAccountsOverview() {
   vsRows = list;
 
   document.getElementById('store-view-content').innerHTML = `
-    <div id="acct-overview-kpis">
+    ${showKpiRibbon ? `<div id="acct-overview-kpis">
       <div class="mgr-panel">
         <div style="display:flex;gap:0;align-items:stretch;opacity:0.35">
           <div style="min-width:240px;width:240px;padding:8px 20px 8px 4px;border-right:1px solid rgba(255,255,255,0.12);margin-right:20px;flex-shrink:0"></div>
-          <div style="flex:1;display:flex;flex-direction:column;gap:8px;padding:4px 0">
-            <div class="mgr-pill-row">
-              ${['Year Run Rate','Annual Goal','Month Run Rate','Monthly Goal','Daily Needed','Active Accounts'].map(lbl => `
-                <div class="mgr-pill"><div class="mgr-pill-label">${lbl}</div><div class="mgr-pill-value">—</div></div>`).join('')}
-            </div>
-            <div class="mgr-pill-row">
-              ${['% to Annual Target','YTD Sales','% to Monthly Target','MTD Sales','Avg Order','Best Sellers on PO'].map(lbl => `
-                <div class="mgr-pill"><div class="mgr-pill-label">${lbl}</div><div class="mgr-pill-value">—</div></div>`).join('')}
-            </div>
+          <div style="flex:1;display:flex;gap:8px;padding:4px 0">
+            ${showTopFilter ? `<div class="kpi-group-card kpi-filters-card"><div class="kpi-group-label">Filters</div></div>` : ''}
+            ${[['Annual',['Annual Goal','Year Run Rate','YTD Sales','% to Annual Goal']],['Monthly',['Monthly Goal','Month Run Rate','MTD Sales','% to Monthly Goal']],['Other',['Daily Needed','Active Accounts','Avg Order','Best Sellers']]].map(([grp,labels]) => `
+              <div class="kpi-group-card" style="flex:1">
+                <div class="kpi-group-label">${grp}</div>
+                <div class="kpi-group-grid">
+                  ${labels.map(lbl => `<div class="mgr-pill"><div class="mgr-pill-label">${lbl}</div><div class="mgr-pill-value">—</div></div>`).join('')}
+                </div>
+              </div>`).join('')}
           </div>
         </div>
       </div>
-    </div>
+    </div>` : ''}
 
     <div class="tier-filter-bar">
       ${tierBtn('All')}${tierBtn('Healthy')}${tierBtn('Attention')}${tierBtn('AtRisk')}${tierBtn('Critical')}
@@ -1817,6 +2047,13 @@ function renderAccountsOverview() {
     renderAccountsCharts(list, byRep);
     bindAcctHeaderDrag();
     reopenActiveFilter();
+    if (showTopFilter) {
+      _updateTopFilterCount();
+      // Restore dropdown selections after re-render
+      const r = document.getElementById('tf-rep');   if (r) r.value = acctTopFilter.rep;
+      const s = document.getElementById('tf-state'); if (s) s.value = acctTopFilter.state;
+      const c = document.getElementById('tf-cat');   if (c) c.value = acctTopFilter.category;
+    }
 
     // Initial virtual scroll render
     renderVsRows();

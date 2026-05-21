@@ -30,13 +30,12 @@ function getAnnualGrowthPct() {
 }
 
 // Monthly growth target for a specific month, e.g. '2026-05'.
-// Falls back to defaultMonthlyGrowthPct if the month isn't explicitly set.
+// monthly-goal-store is the primary source; kellis-config.json is the legacy fallback.
 function getMonthlyGrowthPct(yyyyMM) {
+  const { getGrowthPct } = require('./monthly-goal-store');
   const cfg = readConfig();
-  if (yyyyMM && cfg.monthlyGrowthPct && cfg.monthlyGrowthPct[yyyyMM] != null) {
-    return cfg.monthlyGrowthPct[yyyyMM];
-  }
-  return cfg.defaultMonthlyGrowthPct ?? 0.05;
+  const legacyDefault = cfg.defaultMonthlyGrowthPct ?? 0.05;
+  return getGrowthPct(yyyyMM, legacyDefault);
 }
 
 module.exports = { readConfig, writeConfig, getAnnualGrowthPct, getMonthlyGrowthPct };
